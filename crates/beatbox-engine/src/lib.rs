@@ -238,6 +238,14 @@ mod wasm {
 
     use super::*;
 
+    /// Upper bound on both the raw source (WAT text / decoded bytes) and the
+    /// resulting module bytes accepted by the engine. Attacker-controlled bytes
+    /// are parsed and compiled by Cranelift before any store/fuel/memory/epoch
+    /// limit applies, so a crafted large module can burn host CPU/memory outside
+    /// all policy limits. The HTTP surface caps request bodies separately; this
+    /// guard protects the engine (and non-HTTP embedders) independently.
+    const MAX_WASM_MODULE_BYTES: usize = 16 * 1024 * 1024;
+
     #[derive(Clone)]
     pub struct WasmLane {
         engine: Engine,
@@ -274,10 +282,24 @@ mod wasm {
         fn table_growing(
             &mut self,
             _current: usize,
-            _desired: usize,
+            desired: usize,
             _maximum: Option<usize>,
         ) -> wasmtime::Result<bool> {
-            Ok(true)
+            // Table element storage is host memory too, but it is not counted
+            // against `memory_growing`. Without a bound here a guest can allocate
+            // multiple GB of pointers via a large table (declared minimum or
+            // `table.grow`) and bypass the policy memory ceiling. Charge each
+            // element at least a pointer and cap total table bytes at the same
+            // budget as linear memory.
+            let desired_bytes = desired.saturating_mul(std::mem::size_of::<usize>());
+            if desired_bytes > self.memory_size {
+                Err(wasmtime::format_err!(
+                    "beatbox table limit exceeded: desired {desired} elements (~{desired_bytes} bytes) exceeds policy limit {} bytes",
+                    self.memory_size
+                ))
+            } else {
+                Ok(true)
+            }
         }
 
         fn instances(&self) -> usize {
@@ -312,6 +334,27 @@ mod wasm {
             let module_bytes = load_wasm_source(&request.source)?;
             let inputs_digest = digest_wasm_inputs(&request, &module_bytes)?;
             let isolation = wasm_isolation(&request.policy);
+
+            if module_bytes.len() > MAX_WASM_MODULE_BYTES {
+                return Ok(result(
+                    &request,
+                    ExecutionStatus::Denied,
+                    serde_json::Value::Null,
+                    Some(ErrorBody::new(
+                        "module_too_large",
+                        format!(
+                            "wasm module is {} bytes, exceeding the engine limit of {MAX_WASM_MODULE_BYTES} bytes",
+                            module_bytes.len()
+                        ),
+                    )),
+                    Metrics {
+                        wall_time_ms: elapsed_ms(started),
+                        ..Metrics::default()
+                    },
+                    isolation,
+                    inputs_digest,
+                ));
+            }
 
             let module = match Module::new(&self.engine, &module_bytes) {
                 Ok(module) => module,
@@ -483,6 +526,7 @@ mod wasm {
     fn load_wasm_source(source: &Source) -> Result<Vec<u8>, EngineError> {
         match source {
             Source::Inline { code } | Source::WasmWat { text: code } => {
+                guard_source_len(code.len())?;
                 wat::parse_str(code).map_err(|error| EngineError::ParseWat(error.to_string()))
             }
             Source::WasmFile { path } => {
@@ -490,6 +534,7 @@ mod wasm {
                     path: path.display().to_string(),
                     source,
                 })?;
+                guard_source_len(bytes.len())?;
                 if path.extension().and_then(|ext| ext.to_str()) == Some("wat") {
                     wat::parse_bytes(&bytes)
                         .map(|cow| cow.into_owned())
@@ -498,14 +543,30 @@ mod wasm {
                     Ok(bytes)
                 }
             }
-            Source::WasmBytesBase64 { bytes } => base64::engine::general_purpose::STANDARD
-                .decode(bytes)
-                .map_err(|error| EngineError::DecodeBase64(error.to_string())),
+            Source::WasmBytesBase64 { bytes } => {
+                guard_source_len(bytes.len())?;
+                base64::engine::general_purpose::STANDARD
+                    .decode(bytes)
+                    .map_err(|error| EngineError::DecodeBase64(error.to_string()))
+            }
             Source::ModuleRef { .. } => Err(EngineError::InvalidSource {
                 lane: Lane::Wasm,
                 reason: "module_ref storage is planned for M2.5 and is not implemented yet"
                     .to_string(),
             }),
+        }
+    }
+
+    fn guard_source_len(len: usize) -> Result<(), EngineError> {
+        if len > MAX_WASM_MODULE_BYTES {
+            Err(EngineError::InvalidSource {
+                lane: Lane::Wasm,
+                reason: format!(
+                    "wasm source is {len} bytes, exceeding the engine limit of {MAX_WASM_MODULE_BYTES} bytes"
+                ),
+            })
+        } else {
+            Ok(())
         }
     }
 
@@ -654,6 +715,7 @@ mod wasm {
             || lower.contains("forcing a memory growth failure to be a trap")
             || lower.contains("failed to grow memory")
             || lower.contains("memory limit exceeded")
+            || lower.contains("table limit exceeded")
             || lower.contains("exceeds memory limits")
             || lower.contains("exceeds memory limit")
             || lower.contains("out of memory")
@@ -998,6 +1060,82 @@ mod tests {
             .ok_or_else(|| std::io::Error::other("oom should include an error"))?;
         assert_eq!(error.code, "memory_limit");
         assert!(result.stderr.contains("beatbox memory limit exceeded"));
+        Ok(())
+    }
+
+    #[test]
+    fn wasm_table_grow_is_bounded_by_memory_budget() -> Result<(), Box<dyn std::error::Error>> {
+        let engine = BeatboxEngine::new()?;
+        // A single cheap `table.grow` with a huge delta would otherwise allocate
+        // gigabytes of host pointers, uncounted against memory_bytes.
+        let mut request = request_for(
+            r#"
+            (module
+              (table 1 funcref)
+              (func (export "run") (result i64)
+                (table.grow (ref.null func) (i32.const 1000000000))
+                drop
+                i64.const 1))
+            "#,
+            serde_json::Value::Null,
+        );
+        request.policy.limits.memory_bytes = 65_536;
+
+        let result = engine.execute(request)?;
+
+        assert_eq!(result.status, ExecutionStatus::Oom, "{}", result.stderr);
+        let error = result
+            .error
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("table growth denial should include an error"))?;
+        assert_eq!(error.code, "memory_limit");
+        assert!(result.stderr.contains("beatbox table limit exceeded"));
+        Ok(())
+    }
+
+    #[test]
+    fn wasm_large_initial_table_is_denied() -> Result<(), Box<dyn std::error::Error>> {
+        let engine = BeatboxEngine::new()?;
+        // A large declared minimum table must be caught at instantiation, not
+        // allocated wholesale before any policy limit applies.
+        let mut request = request_for(
+            r#"
+            (module
+              (table 1000000000 funcref)
+              (func (export "run") (result i64)
+                i64.const 1))
+            "#,
+            serde_json::Value::Null,
+        );
+        request.policy.limits.memory_bytes = 65_536;
+
+        let result = engine.execute(request)?;
+
+        assert_eq!(result.status, ExecutionStatus::Oom, "{}", result.stderr);
+        assert_eq!(
+            result.error.as_ref().map(|error| error.code.as_str()),
+            Some("memory_limit")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn oversized_wasm_source_is_denied_before_compilation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let engine = BeatboxEngine::new()?;
+        // A WAT text larger than the engine cap is rejected without parsing or
+        // compiling it (the compile-time DoS guard).
+        let filler = "(func)".repeat(3_000_000);
+        let wat = format!("(module {filler})");
+        assert!(wat.len() > 16 * 1024 * 1024);
+        let result = engine.execute(request_for(&wat, serde_json::Value::Null));
+
+        match result {
+            Err(EngineError::InvalidSource { reason, .. }) => {
+                assert!(reason.contains("exceeding the engine limit"), "{reason}");
+            }
+            other => panic!("expected oversized source rejection, got {other:?}"),
+        }
         Ok(())
     }
 
