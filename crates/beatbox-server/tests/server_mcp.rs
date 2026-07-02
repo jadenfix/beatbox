@@ -232,8 +232,8 @@ async fn auth_required_rejects_execute_before_json_parse() -> Result<(), Box<dyn
 }
 
 #[tokio::test]
-async fn example_request_body_is_accepted_by_v1_execute()
--> Result<(), Box<dyn std::error::Error>> {
+async fn example_request_body_is_accepted_by_v1_execute() -> Result<(), Box<dyn std::error::Error>>
+{
     // examples/req-fib.json is the repo's canonical HTTP request body; keep it a
     // request the REST API actually accepts (regression for the old wasm_file
     // example that /v1/execute rejected by design).
