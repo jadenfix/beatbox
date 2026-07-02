@@ -100,12 +100,47 @@ pub enum AuthMode {
     #[default]
     None,
     Required {
-        token: String,
+        token: AuthToken,
     },
 }
 
+/// A validated, non-empty authentication token. The inner value is private so an
+/// `AuthMode::Required` carrying an empty token cannot be constructed from any
+/// entry point — the only way in is [`AuthToken::new`], which rejects empties.
+/// This closes the hole where `constant_time_eq(b"", b"")` let a request with an
+/// empty `x-beatbox-api-key`/`Authorization: Bearer` header authorize.
+#[derive(Clone)]
+pub struct AuthToken(String);
+
+impl AuthToken {
+    pub fn new(token: impl Into<String>) -> Result<Self, AuthError> {
+        let token = token.into();
+        if token.trim().is_empty() {
+            return Err(AuthError::EmptyToken);
+        }
+        Ok(Self(token))
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AuthError {
+    #[error("authentication token must not be empty")]
+    EmptyToken,
+}
+
 impl AuthMode {
-    fn required(&self) -> bool {
+    /// Build a token-required auth mode, rejecting empty/whitespace tokens.
+    pub fn required(token: impl Into<String>) -> Result<Self, AuthError> {
+        Ok(Self::Required {
+            token: AuthToken::new(token)?,
+        })
+    }
+
+    fn is_required(&self) -> bool {
         matches!(self, Self::Required { .. })
     }
 }
@@ -287,19 +322,20 @@ impl AppState {
     }
 }
 
-fn api_key_authorized(headers: &HeaderMap, token: &str) -> bool {
+fn api_key_authorized(headers: &HeaderMap, token: &AuthToken) -> bool {
     headers
         .get("x-beatbox-api-key")
         .and_then(|value| value.to_str().ok())
         .is_some_and(|actual| constant_time_eq(actual.as_bytes(), token.as_bytes()))
 }
 
-fn bearer_authorized(headers: &HeaderMap, token: &str) -> bool {
-    let expected = format!("Bearer {token}");
+fn bearer_authorized(headers: &HeaderMap, token: &AuthToken) -> bool {
+    let mut expected = b"Bearer ".to_vec();
+    expected.extend_from_slice(token.as_bytes());
     headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|actual| constant_time_eq(actual.as_bytes(), expected.as_bytes()))
+        .is_some_and(|actual| constant_time_eq(actual.as_bytes(), &expected))
 }
 
 #[derive(Debug)]
@@ -761,7 +797,7 @@ async fn mcp_post(State(state): State<AppState>, request: Request<Body>) -> Resp
             json!({"jsonrpc": "2.0", "error": {"code": -32600, "message": "origin not allowed"}}),
         );
     }
-    if state.config.auth.required()
+    if state.config.auth.is_required()
         && let Err(error) = state.authorize(&headers)
     {
         return json_response(

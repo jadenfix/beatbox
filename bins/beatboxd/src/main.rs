@@ -52,7 +52,7 @@ async fn main() -> Result<()> {
     }
     let mut config = ServerConfig::new(engine).with_sqlite_job_store(&cli.db_path)?;
     if let Some(token) = api_key {
-        config.auth = AuthMode::Required { token };
+        config.auth = AuthMode::required(token)?;
     }
     let listener = tokio::net::TcpListener::bind(cli.addr).await?;
     println!("beatboxd listening on http://{}", cli.addr);

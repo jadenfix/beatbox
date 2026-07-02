@@ -216,9 +216,7 @@ async fn v1_execute_rejects_when_sync_concurrency_cap_is_exhausted()
 async fn auth_required_rejects_execute_before_json_parse() -> Result<(), Box<dyn std::error::Error>>
 {
     let mut config = ServerConfig::new(BeatboxEngine::new()?);
-    config.auth = AuthMode::Required {
-        token: "secret".to_string(),
-    };
+    config.auth = AuthMode::required("secret")?;
     let app = router(config);
     let response = app
         .oneshot(
@@ -537,9 +535,7 @@ async fn jobs_can_be_canceled() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::test]
 async fn auth_required_rejects_keyless_requests() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = ServerConfig::new(BeatboxEngine::new()?);
-    config.auth = AuthMode::Required {
-        token: "secret".to_string(),
-    };
+    config.auth = AuthMode::required("secret")?;
     let app = router(config);
     let response = app
         .clone()
@@ -565,12 +561,37 @@ async fn auth_required_rejects_keyless_requests() -> Result<(), Box<dyn std::err
     Ok(())
 }
 
+#[test]
+fn auth_required_rejects_empty_tokens() {
+    assert!(AuthMode::required("").is_err());
+    assert!(AuthMode::required("   ").is_err());
+    assert!(AuthMode::required("secret").is_ok());
+}
+
+#[tokio::test]
+async fn auth_required_rejects_empty_api_key_header() -> Result<(), Box<dyn std::error::Error>> {
+    let mut config = ServerConfig::new(BeatboxEngine::new()?);
+    config.auth = AuthMode::required("secret")?;
+    let app = router(config);
+    // An empty header must never authorize, even though constant_time_eq(b"", b"")
+    // would be true for an empty configured token (now unrepresentable).
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/capabilities")
+                .header("x-beatbox-api-key", "")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    Ok(())
+}
+
 #[tokio::test]
 async fn auth_required_keeps_bearer_compatibility() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = ServerConfig::new(BeatboxEngine::new()?);
-    config.auth = AuthMode::Required {
-        token: "secret".to_string(),
-    };
+    config.auth = AuthMode::required("secret")?;
     let app = router(config);
     let response = app
         .oneshot(
@@ -589,9 +610,7 @@ async fn auth_required_keeps_bearer_compatibility() -> Result<(), Box<dyn std::e
 async fn auth_required_rejects_mcp_tools_list_without_key() -> Result<(), Box<dyn std::error::Error>>
 {
     let mut config = ServerConfig::new(BeatboxEngine::new()?);
-    config.auth = AuthMode::Required {
-        token: "secret".to_string(),
-    };
+    config.auth = AuthMode::required("secret")?;
     let app = router(config);
     let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
     let response = app
@@ -626,9 +645,7 @@ async fn auth_required_rejects_mcp_tools_list_without_key() -> Result<(), Box<dy
 #[tokio::test]
 async fn auth_required_rejects_mcp_before_json_parse() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = ServerConfig::new(BeatboxEngine::new()?);
-    config.auth = AuthMode::Required {
-        token: "secret".to_string(),
-    };
+    config.auth = AuthMode::required("secret")?;
     let app = router(config);
     let response = app
         .oneshot(
