@@ -248,7 +248,12 @@ mod wasm {
 
     #[derive(Clone)]
     pub struct WasmLane {
-        engine: Engine,
+        // Intentionally holds no shared Engine. `wasmtime::Engine` clones share a
+        // single Arc-backed epoch counter, so a per-execution deadline ticker
+        // incrementing that global counter trips *every* concurrent store whose
+        // relative deadline matches — a short job spuriously kills a long one.
+        // Each execution builds its own engine below so the epoch counter and its
+        // ticker are isolated. Engine construction is cheap next to compilation.
     }
 
     struct WasmState {
@@ -315,22 +320,28 @@ mod wasm {
         }
     }
 
+    fn build_engine() -> Result<Engine, EngineError> {
+        let mut config = Config::new();
+        config.wasm_component_model(true);
+        config.consume_fuel(true);
+        config.epoch_interruption(true);
+        config.cranelift_nan_canonicalization(true);
+        config.relaxed_simd_deterministic(true);
+        Engine::new(&config).map_err(|error| EngineError::WasmtimeEngine(error.to_string()))
+    }
+
     impl WasmLane {
         pub fn new() -> Result<Self, EngineError> {
-            let mut config = Config::new();
-            config.wasm_component_model(true);
-            config.consume_fuel(true);
-            config.epoch_interruption(true);
-            config.cranelift_nan_canonicalization(true);
-            config.relaxed_simd_deterministic(true);
-            let engine = Engine::new(&config)
-                .map_err(|error| EngineError::WasmtimeEngine(error.to_string()))?;
-            Ok(Self { engine })
+            // Validate the engine configuration once so misconfiguration fails at
+            // construction rather than on the first execute.
+            build_engine()?;
+            Ok(Self {})
         }
 
         pub fn execute(&self, request: ExecuteRequest) -> Result<ExecutionResult, EngineError> {
             admit_wasm_policy(&request.policy)?;
             let started = Instant::now();
+            let engine = build_engine()?;
             let module_bytes = load_wasm_source(&request.source)?;
             let inputs_digest = digest_wasm_inputs(&request, &module_bytes)?;
             let isolation = wasm_isolation(&request.policy);
@@ -356,7 +367,7 @@ mod wasm {
                 ));
             }
 
-            let module = match Module::new(&self.engine, &module_bytes) {
+            let module = match Module::new(&engine, &module_bytes) {
                 Ok(module) => module,
                 Err(error) => {
                     return Ok(result(
@@ -396,7 +407,7 @@ mod wasm {
             let memory_limit =
                 usize::try_from(request.policy.limits.memory_bytes).unwrap_or(usize::MAX);
             let mut store = Store::new(
-                &self.engine,
+                &engine,
                 WasmState {
                     limits: WasmStoreLimits {
                         memory_size: memory_limit,
@@ -424,8 +435,8 @@ mod wasm {
             }
 
             store.set_epoch_deadline(1);
-            let stop_ticker = epoch_ticker(self.engine.clone(), request.policy.limits.wall_ms);
-            let linker = Linker::new(&self.engine);
+            let stop_ticker = epoch_ticker(engine.clone(), request.policy.limits.wall_ms);
+            let linker = Linker::new(&engine);
             let value = run_entrypoint(&mut store, &linker, &module, &request);
             stop_ticker.stop();
 
@@ -1188,6 +1199,66 @@ mod tests {
                 .stderr
                 .contains("missing supported entrypoint `grow`")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_short_execution_does_not_trip_long_execution()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Regression for the shared-epoch-counter bug: a short job's deadline
+        // ticker must not spuriously time out a concurrent long job. The long
+        // execution does bounded work well under its own wall/fuel budget while a
+        // short execution with a tiny wall budget times out beside it.
+        let long_wat = r#"
+            (module
+              (func (export "run") (param i64) (result i64)
+                (local $i i64)
+                (local.set $i (i64.const 50000000))
+                (block $done
+                  (loop $loop
+                    (br_if $done (i64.eqz (local.get $i)))
+                    (local.set $i (i64.sub (local.get $i) (i64.const 1)))
+                    (br $loop)))
+                (i64.const 7)))
+        "#;
+        let short_wat = r#"
+            (module
+              (func (export "run") (param i64) (result i64)
+                (loop br 0)
+                (i64.const 0)))
+        "#;
+
+        let long_engine = BeatboxEngine::new()?;
+        let short_engine = long_engine.clone();
+
+        let long = std::thread::spawn(move || {
+            let mut request = request_for(long_wat, serde_json::json!({ "n": 0 }));
+            request.policy.limits.wall_ms = 30_000;
+            request.policy.limits.fuel = Some(1_000_000_000);
+            long_engine.execute(request)
+        });
+        let short = std::thread::spawn(move || {
+            let mut request = request_for(short_wat, serde_json::json!({ "n": 0 }));
+            request.policy.limits.wall_ms = 25;
+            request.policy.limits.fuel = Some(1_000_000_000);
+            short_engine.execute(request)
+        });
+
+        let long = long
+            .join()
+            .map_err(|_| std::io::Error::other("long execution thread panicked"))??;
+        let short = short
+            .join()
+            .map_err(|_| std::io::Error::other("short execution thread panicked"))??;
+
+        assert_eq!(
+            long.status,
+            ExecutionStatus::Ok,
+            "long job was spuriously killed: {}",
+            long.stderr
+        );
+        assert_eq!(long.value, serde_json::json!(7));
+        assert_eq!(short.status, ExecutionStatus::Timeout);
         Ok(())
     }
 
