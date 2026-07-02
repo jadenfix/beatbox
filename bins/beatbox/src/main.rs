@@ -30,6 +30,7 @@ enum Command {
         api_key: Option<String>,
         /// Read the API key from a file instead of --api-key/BEATBOX_API_KEY so
         /// the secret never appears in `ps`/`/proc/*/cmdline` or shell history.
+        /// Takes precedence over --api-key/BEATBOX_API_KEY when both are set.
         #[arg(long, env = "BEATBOX_API_KEY_FILE")]
         api_key_file: Option<PathBuf>,
         #[arg(long = "policy")]
@@ -128,20 +129,19 @@ async fn run(
     Ok(())
 }
 
-/// Resolve the API key from at most one of the inline flag/env or a file path.
-/// Reading from a file keeps the secret out of the process argument list.
+/// Resolve the API key, preferring the file when given. File precedence (rather
+/// than erroring on both) avoids a footgun: clap's `env` fallback populates the
+/// inline key from BEATBOX_API_KEY whether or not the user passed --api-key, so
+/// treating "both present" as an error would spuriously reject the common case
+/// of a leftover env var plus an explicit --api-key-file.
 fn resolve_api_key(inline: Option<String>, file: Option<PathBuf>) -> Result<Option<String>> {
-    match (inline, file) {
-        (Some(_), Some(_)) => bail!(
-            "pass only one of --api-key/BEATBOX_API_KEY or --api-key-file/BEATBOX_API_KEY_FILE"
-        ),
-        (Some(value), None) => Ok(non_empty(value)),
-        (None, Some(path)) => {
+    match file {
+        Some(path) => {
             let contents = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read API key file {}", path.display()))?;
             Ok(non_empty(contents))
         }
-        (None, None) => Ok(None),
+        None => Ok(inline.and_then(non_empty)),
     }
 }
 

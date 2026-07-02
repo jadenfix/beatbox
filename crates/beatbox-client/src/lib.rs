@@ -84,7 +84,15 @@ impl Client {
     /// Build the `/v1/jobs/{id}` URL with `job_id` percent-encoded as a single
     /// path segment. Interpolating the id directly would let an id containing
     /// `/`, `?`, or `#` retarget the request (e.g. `../execute`, `x?k=v`).
+    /// Empty and dot-segment ids (`""`, `.`, `..`) are rejected outright: the URL
+    /// crate treats `.`/`..` as relative navigation rather than a literal
+    /// segment, so encoding alone would not keep them under `/v1/jobs/`.
     fn job_url(&self, job_id: &str) -> Result<Url, ClientError> {
+        if job_id.is_empty() || job_id == "." || job_id == ".." {
+            return Err(ClientError::InvalidUrl(format!(
+                "invalid job id: {job_id:?}"
+            )));
+        }
         let mut url = Url::parse(&format!("{}/v1/jobs/", self.base_url))
             .map_err(|error| ClientError::InvalidUrl(error.to_string()))?;
         url.path_segments_mut()
@@ -217,6 +225,16 @@ mod tests {
         // `x?k=v` must not smuggle a query string.
         let url = client.job_url("x?k=v")?;
         assert_eq!(url.query(), None);
+        assert_eq!(url.path().matches('/').count(), 3);
+
+        // Bare dot-segments and empty ids are rejected (url treats `.`/`..` as
+        // relative navigation, so they could otherwise reach /v1/jobs).
+        assert!(client.job_url("").is_err());
+        assert!(client.job_url(".").is_err());
+        assert!(client.job_url("..").is_err());
+
+        // A slash-bearing id stays one encoded segment even with dots present.
+        let url = client.job_url("a/b/..")?;
         assert_eq!(url.path().matches('/').count(), 3);
         Ok(())
     }

@@ -57,17 +57,27 @@ pub enum MountMode {
     Rw,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+// `Deny` is an empty *struct* variant (`Deny {}`), not a unit variant, because
+// serde silently ignores `deny_unknown_fields` on unit variants of an
+// internally-tagged enum — `{"kind":"deny","allow_domains":[...]}` would be
+// accepted and the extra keys dropped. An empty struct variant is validated, so
+// unknown keys on `deny` are rejected like every other variant.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum NetPolicy {
-    #[default]
-    Deny,
+    Deny {},
     Proxy {
         #[serde(default)]
         allow_domains: Vec<String>,
         #[serde(default)]
         allow_ports: Vec<u16>,
     },
+}
+
+impl Default for NetPolicy {
+    fn default() -> Self {
+        Self::Deny {}
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -146,15 +156,20 @@ impl Default for Limits {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+// `Off` is an empty struct variant for the same reason as `NetPolicy::Deny`:
+// `deny_unknown_fields` is a no-op on unit variants of an internally-tagged
+// enum, so `{"kind":"off","seed":5}` would be silently accepted.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Determinism {
-    #[default]
-    Off,
-    Seeded {
-        seed: u64,
-        epoch_ms: u64,
-    },
+    Off {},
+    Seeded { seed: u64, epoch_ms: u64 },
+}
+
+impl Default for Determinism {
+    fn default() -> Self {
+        Self::Off {}
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -326,6 +341,26 @@ mod tests {
         assert!(serde_json::from_str::<Policy>(r#"{"double_jale": true}"#).is_err());
         // A typo'd limits key must be rejected too.
         assert!(serde_json::from_str::<Policy>(r#"{"limits": {"wall_mss": 1}}"#).is_err());
+    }
+
+    #[test]
+    fn unknown_fields_on_tagged_enum_unit_variants_are_rejected() -> Result<(), serde_json::Error> {
+        // Regression: deny_unknown_fields must also fire on the empty variants
+        // (`deny`, `off`), not just the struct-shaped ones.
+        assert!(serde_json::from_str::<NetPolicy>(r#"{"kind":"deny"}"#).is_ok());
+        assert!(
+            serde_json::from_str::<NetPolicy>(r#"{"kind":"deny","allow_domains":["x"]}"#).is_err()
+        );
+        assert!(serde_json::from_str::<Determinism>(r#"{"kind":"off"}"#).is_ok());
+        assert!(serde_json::from_str::<Determinism>(r#"{"kind":"off","seed":5}"#).is_err());
+        // Defaults and round-trips still hold with the empty-struct-variant shape.
+        assert_eq!(NetPolicy::default(), NetPolicy::Deny {});
+        assert_eq!(Determinism::default(), Determinism::Off {});
+        assert_eq!(
+            serde_json::to_string(&NetPolicy::default())?,
+            r#"{"kind":"deny"}"#
+        );
+        Ok(())
     }
 
     #[test]

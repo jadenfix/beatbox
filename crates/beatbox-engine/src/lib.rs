@@ -262,6 +262,13 @@ mod wasm {
 
     struct WasmStoreLimits {
         memory_size: usize,
+        // Current linear-memory and table byte usage, tracked so the policy
+        // memory ceiling bounds *total* guest host memory. Tables and linear
+        // memory share one budget: capping each in isolation would let a guest
+        // reach `tables * memory_size` (the store permits several tables) plus
+        // the linear-memory budget on top, several times the intended ceiling.
+        linear_bytes: usize,
+        table_bytes: usize,
         instances: usize,
         memories: usize,
         tables: usize,
@@ -274,35 +281,46 @@ mod wasm {
             desired: usize,
             _maximum: Option<usize>,
         ) -> wasmtime::Result<bool> {
-            if desired > self.memory_size {
+            // `desired` is the absolute new size of this linear memory (one
+            // memory per store). Bound it together with table storage.
+            let total = desired.saturating_add(self.table_bytes);
+            if total > self.memory_size {
                 Err(wasmtime::format_err!(
-                    "beatbox memory limit exceeded: desired {desired} bytes exceeds policy limit {} bytes",
+                    "beatbox memory limit exceeded: desired {desired} bytes plus {} table bytes exceeds policy limit {} bytes",
+                    self.table_bytes,
                     self.memory_size
                 ))
             } else {
+                self.linear_bytes = desired;
                 Ok(true)
             }
         }
 
         fn table_growing(
             &mut self,
-            _current: usize,
+            current: usize,
             desired: usize,
             _maximum: Option<usize>,
         ) -> wasmtime::Result<bool> {
-            // Table element storage is host memory too, but it is not counted
-            // against `memory_growing`. Without a bound here a guest can allocate
-            // multiple GB of pointers via a large table (declared minimum or
+            // Table element storage is host memory too, but wasmtime does not
+            // count it against `memory_growing`. Without a bound a guest can
+            // allocate many GB of pointers via a large table (declared minimum or
             // `table.grow`) and bypass the policy memory ceiling. Charge each
-            // element at least a pointer and cap total table bytes at the same
-            // budget as linear memory.
-            let desired_bytes = desired.saturating_mul(std::mem::size_of::<usize>());
-            if desired_bytes > self.memory_size {
+            // element at least a pointer and accumulate across every table so the
+            // aggregate (plus linear memory) stays within the single budget.
+            let added = desired
+                .saturating_sub(current)
+                .saturating_mul(std::mem::size_of::<usize>());
+            let new_table_bytes = self.table_bytes.saturating_add(added);
+            let total = self.linear_bytes.saturating_add(new_table_bytes);
+            if total > self.memory_size {
                 Err(wasmtime::format_err!(
-                    "beatbox table limit exceeded: desired {desired} elements (~{desired_bytes} bytes) exceeds policy limit {} bytes",
+                    "beatbox table limit exceeded: {new_table_bytes} table bytes plus {} linear bytes exceeds policy limit {} bytes",
+                    self.linear_bytes,
                     self.memory_size
                 ))
             } else {
+                self.table_bytes = new_table_bytes;
                 Ok(true)
             }
         }
@@ -411,6 +429,8 @@ mod wasm {
                 WasmState {
                     limits: WasmStoreLimits {
                         memory_size: memory_limit,
+                        linear_bytes: 0,
+                        table_bytes: 0,
                         instances: 1,
                         memories: 1,
                         tables: 4,
@@ -507,7 +527,7 @@ mod wasm {
                 ),
             });
         }
-        if !matches!(policy.net, NetPolicy::Deny) {
+        if !matches!(policy.net, NetPolicy::Deny {}) {
             return Err(EngineError::PolicyUnenforceable {
                 field: "net",
                 lane: Lane::Wasm,
@@ -1118,6 +1138,36 @@ mod tests {
             "#,
             serde_json::Value::Null,
         );
+        request.policy.limits.memory_bytes = 65_536;
+
+        let result = engine.execute(request)?;
+
+        assert_eq!(result.status, ExecutionStatus::Oom, "{}", result.stderr);
+        assert_eq!(
+            result.error.as_ref().map(|error| error.code.as_str()),
+            Some("memory_limit")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn wasm_multiple_tables_cannot_exceed_aggregate_budget()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let engine = BeatboxEngine::new()?;
+        // Each table individually stays under the budget, but together they would
+        // exceed it. The limiter accumulates across tables, so this must be
+        // denied rather than allowing tables * memory_bytes of host storage.
+        let elems = 65_536 / std::mem::size_of::<usize>(); // exactly one budget's worth
+        let wat = format!(
+            r#"
+            (module
+              (table {elems} funcref)
+              (table {elems} funcref)
+              (func (export "run") (result i64)
+                i64.const 1))
+            "#
+        );
+        let mut request = request_for(&wat, serde_json::Value::Null);
         request.policy.limits.memory_bytes = 65_536;
 
         let result = engine.execute(request)?;
