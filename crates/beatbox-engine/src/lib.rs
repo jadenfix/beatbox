@@ -551,6 +551,37 @@ mod wasm {
                 reason: "the initial wasm lane exposes no secrets".to_string(),
             });
         }
+        // Fail closed on resource limits the wasm lane cannot honor, rather than
+        // silently ignoring them (which gives false assurance — SECURITY.md
+        // advertises a CPU budget). The lane bounds compute via wall_ms + fuel and
+        // memory via memory_bytes; cpu_ms/pids/disk_bytes have no W0 enforcement
+        // point. Only a value that differs from the default (i.e. the caller
+        // actually asked for that ceiling) is rejected.
+        let defaults = Policy::default().limits;
+        if policy.limits.cpu_ms != defaults.cpu_ms {
+            return Err(EngineError::PolicyUnenforceable {
+                field: "limits.cpu_ms",
+                lane: Lane::Wasm,
+                os,
+                reason: "the wasm lane bounds compute via wall_ms and fuel; an independent cpu_ms ceiling cannot be enforced".to_string(),
+            });
+        }
+        if policy.limits.pids != defaults.pids {
+            return Err(EngineError::PolicyUnenforceable {
+                field: "limits.pids",
+                lane: Lane::Wasm,
+                os,
+                reason: "the W0 wasm lane runs no host processes; a pids ceiling cannot be enforced".to_string(),
+            });
+        }
+        if policy.limits.disk_bytes != defaults.disk_bytes {
+            return Err(EngineError::PolicyUnenforceable {
+                field: "limits.disk_bytes",
+                lane: Lane::Wasm,
+                os,
+                reason: "the W0 wasm lane exposes no filesystem; a disk_bytes ceiling cannot be enforced".to_string(),
+            });
+        }
         Ok(())
     }
 
@@ -983,12 +1014,39 @@ mod tests {
             ..Policy::default()
         };
 
+        let cpu = Policy {
+            limits: beatbox_core::Limits {
+                cpu_ms: 1,
+                ..beatbox_core::Limits::default()
+            },
+            ..Policy::default()
+        };
+
+        let pids = Policy {
+            limits: beatbox_core::Limits {
+                pids: 8,
+                ..beatbox_core::Limits::default()
+            },
+            ..Policy::default()
+        };
+
+        let disk = Policy {
+            limits: beatbox_core::Limits {
+                disk_bytes: 1,
+                ..beatbox_core::Limits::default()
+            },
+            ..Policy::default()
+        };
+
         for (expected_field, policy) in [
             ("fs.workspace", workspace),
             ("fs.mounts", mounts),
             ("net", net),
             ("env", env),
             ("secrets", secrets),
+            ("limits.cpu_ms", cpu),
+            ("limits.pids", pids),
+            ("limits.disk_bytes", disk),
         ] {
             let mut request = request_for(
                 r#"

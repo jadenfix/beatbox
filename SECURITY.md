@@ -10,7 +10,12 @@ capability access, or out-of-policy network egress is a critical vulnerability.
 - Network exfiltration: deny raw egress by default; future egress must go
   through a logging proxy.
 - Resource exhaustion: enforce wall time, fuel or CPU budget, memory, output,
-  process, and disk ceilings where the selected lane supports them.
+  process, and disk ceilings where the selected lane supports them. The W0
+  `wasm` lane bounds compute via `wall_ms` + `fuel` and host memory via
+  `memory_bytes` (linear memory and tables share that budget); it cannot honor
+  an independent `cpu_ms`, `pids`, or `disk_bytes` ceiling and so rejects a
+  request that sets any of them to a non-default value rather than silently
+  ignoring it.
 - Persistence and lateral movement: deny writes outside the workspace and deny
   access to localhost, LAN, cloud metadata, launch agents, hooks, and host env.
 

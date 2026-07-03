@@ -194,6 +194,11 @@ fn apply_policy_items(policy: &mut Policy, items: &[String]) -> Result<()> {
                     .context("deterministic_seed must be an integer")?;
                 policy.determinism = Determinism::Seeded { seed, epoch_ms: 0 };
             }
+            "cpu_ms" | "pids" | "disk_bytes" => {
+                bail!(
+                    "policy key `{key}` is not enforceable by the wasm lane; it bounds compute via `fuel`/`wall_ms` and memory via `memory_bytes`"
+                );
+            }
             other => bail!("unknown policy key `{other}`"),
         }
     }
