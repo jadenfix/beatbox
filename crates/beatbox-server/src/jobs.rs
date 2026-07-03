@@ -229,6 +229,18 @@ impl JobStore {
         Ok(())
     }
 
+    /// Remove a still-queued job. Used to roll back a row that was inserted but
+    /// could not be given a worker (e.g. the concurrency cap was hit), so a later
+    /// retry starts clean. Only deletes queued rows, never one a worker owns.
+    pub fn delete_queued(&self, id: &str) -> Result<(), JobStoreError> {
+        let conn = self.lock()?;
+        conn.execute(
+            "DELETE FROM jobs WHERE id = ?1 AND status = ?2",
+            params![id, JobStatus::Queued.as_str()],
+        )?;
+        Ok(())
+    }
+
     pub fn cancel(&self, id: &str) -> Result<CancelOutcome, JobStoreError> {
         let now = now();
         let conn = self.lock()?;
