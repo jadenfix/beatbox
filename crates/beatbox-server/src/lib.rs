@@ -1,8 +1,9 @@
 mod jobs;
 
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use axum::body::{Body, to_bytes};
@@ -13,13 +14,13 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use beatbox_core::{
-    CreateJobResponse, ErrorBody, ErrorResponse, ExecuteRequest, ExecutionResult, JobRecord, Lane,
-    Policy, Source,
+    CreateJobResponse, ErrorBody, ErrorResponse, ExecuteRequest, ExecutionResult, ExecutionStatus,
+    JobRecord, Lane, Policy, Source,
 };
-use beatbox_engine::{BeatboxEngine, EngineError};
+use beatbox_engine::{BeatboxEngine, CancelFlag, EngineError};
 use bytes::Bytes;
 pub use jobs::JobStore;
-use jobs::JobStoreError;
+use jobs::{CancelOutcome, JobStoreError};
 use serde_json::{Value, json};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use url::{Host, Url};
@@ -100,12 +101,47 @@ pub enum AuthMode {
     #[default]
     None,
     Required {
-        token: String,
+        token: AuthToken,
     },
 }
 
+/// A validated, non-empty authentication token. The inner value is private so an
+/// `AuthMode::Required` carrying an empty token cannot be constructed from any
+/// entry point — the only way in is [`AuthToken::new`], which rejects empties.
+/// This closes the hole where `constant_time_eq(b"", b"")` let a request with an
+/// empty `x-beatbox-api-key`/`Authorization: Bearer` header authorize.
+#[derive(Clone)]
+pub struct AuthToken(String);
+
+impl AuthToken {
+    pub fn new(token: impl Into<String>) -> Result<Self, AuthError> {
+        let token = token.into();
+        if token.trim().is_empty() {
+            return Err(AuthError::EmptyToken);
+        }
+        Ok(Self(token))
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AuthError {
+    #[error("authentication token must not be empty")]
+    EmptyToken,
+}
+
 impl AuthMode {
-    fn required(&self) -> bool {
+    /// Build a token-required auth mode, rejecting empty/whitespace tokens.
+    pub fn required(token: impl Into<String>) -> Result<Self, AuthError> {
+        Ok(Self::Required {
+            token: AuthToken::new(token)?,
+        })
+    }
+
+    fn is_required(&self) -> bool {
         matches!(self, Self::Required { .. })
     }
 }
@@ -116,6 +152,10 @@ struct AppState {
     config: ServerConfig,
     sync_permits: Arc<Semaphore>,
     job_permits: Arc<Semaphore>,
+    // Cancel handles for jobs whose worker is in flight, so DELETE can interrupt
+    // a running execution instead of only flipping the DB row. Entries are added
+    // in spawn_job and removed when the worker finishes.
+    job_cancels: Arc<Mutex<HashMap<String, CancelFlag>>>,
 }
 
 pub fn router(config: ServerConfig) -> Router {
@@ -126,6 +166,7 @@ pub fn router(config: ServerConfig) -> Router {
         config,
         sync_permits,
         job_permits,
+        job_cancels: Arc::new(Mutex::new(HashMap::new())),
     };
     Router::new()
         .route("/v1/health", get(health))
@@ -172,10 +213,12 @@ async fn create_job(
     state.authorize(&headers)?;
     let request = parse_json_body(&state, request).await?;
     admit_execution_request(&state.config, &request, ExecutionMode::Job)?;
-    if let Some(job_id) = state
-        .config
-        .jobs
-        .find_idempotent(&request)
+    let request = Arc::new(request);
+
+    let store = state.config.jobs.clone();
+    let lookup = Arc::clone(&request);
+    if let Some(job_id) = blocking_store(move || store.find_idempotent(&lookup))
+        .await
         .map_err(ApiError::job_store)?
     {
         return Ok((StatusCode::ACCEPTED, Json(CreateJobResponse { job_id })));
@@ -189,13 +232,14 @@ async fn create_job(
             ),
         )
     })?;
-    let created = state
-        .config
-        .jobs
-        .create_or_get(&request)
+    let store = state.config.jobs.clone();
+    let create = Arc::clone(&request);
+    let created = blocking_store(move || store.create_or_get(&create))
+        .await
         .map_err(ApiError::job_store)?;
     let job_id = created.job_id;
     if created.inserted {
+        let request = Arc::try_unwrap(request).unwrap_or_else(|arc| (*arc).clone());
         spawn_job(state, job_id.clone(), request, permit);
     }
     Ok((StatusCode::ACCEPTED, Json(CreateJobResponse { job_id })))
@@ -207,10 +251,10 @@ async fn get_job(
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<JobRecord>, ApiError> {
     state.authorize(&headers)?;
-    state
-        .config
-        .jobs
-        .get(&id)
+    let store = state.config.jobs.clone();
+    let lookup_id = id.clone();
+    blocking_store(move || store.get(&lookup_id))
+        .await
         .map_err(ApiError::job_store)?
         .map(Json)
         .ok_or_else(|| ApiError::not_found(format!("unknown job: {id}")))
@@ -222,11 +266,24 @@ async fn cancel_job(
     AxumPath(id): AxumPath<String>,
 ) -> Result<StatusCode, ApiError> {
     state.authorize(&headers)?;
-    let exists = state.config.jobs.cancel(&id).map_err(ApiError::job_store)?;
-    if exists {
-        Ok(StatusCode::NO_CONTENT)
-    } else {
-        Err(ApiError::not_found(format!("unknown job: {id}")))
+    let store = state.config.jobs.clone();
+    let cancel_id = id.clone();
+    match blocking_store(move || store.cancel(&cancel_id))
+        .await
+        .map_err(ApiError::job_store)?
+    {
+        CancelOutcome::Canceled => {
+            // Interrupt the in-flight worker (if any) so it stops promptly and
+            // releases its concurrency permit instead of running to its full
+            // wall/fuel budget. No-op if the job was still queued or already done.
+            state.trip_cancel(&id);
+            Ok(StatusCode::NO_CONTENT)
+        }
+        CancelOutcome::AlreadyTerminal => Err(ApiError::conflict(
+            "job_already_terminal",
+            format!("job {id} already finished and cannot be canceled"),
+        )),
+        CancelOutcome::NotFound => Err(ApiError::not_found(format!("unknown job: {id}"))),
     }
 }
 
@@ -236,43 +293,104 @@ fn spawn_job(
     request: ExecuteRequest,
     permit: OwnedSemaphorePermit,
 ) {
+    // Register the cancel handle synchronously (before the task is scheduled) so a
+    // DELETE arriving right after the 202 can always find it.
+    let cancel = state.register_cancel(&job_id);
     tokio::spawn(async move {
         let _permit = permit;
-        match state.config.jobs.mark_running(&job_id) {
+        // Ensures the cancel entry is removed on every exit path.
+        let _cancel_guard = CancelGuard {
+            state: state.clone(),
+            job_id: job_id.clone(),
+        };
+        let store = state.config.jobs.clone();
+        let mark_id = job_id.clone();
+        match blocking_store(move || store.mark_running(&mark_id)).await {
             Ok(true) => {}
             Ok(false) => {
                 tracing::info!(%job_id, "job was canceled before worker start");
                 return;
             }
             Err(error) => {
-                tracing::warn!(%job_id, %error, "failed to mark job running");
+                // Do not leave the job queued with no worker: fail it so callers
+                // (and idempotent retries) see a terminal state.
+                tracing::warn!(%job_id, %error, "failed to mark job running; failing job");
+                let body = ErrorBody::new("job_worker", format!("failed to start worker: {error}"));
+                fail_job(&state, &job_id, body).await;
                 return;
             }
         }
         let engine = state.config.engine.clone();
-        let result = tokio::task::spawn_blocking(move || engine.execute(request)).await;
+        let result =
+            tokio::task::spawn_blocking(move || engine.execute_cancellable(request, &cancel)).await;
         match result {
             Ok(Ok(result)) => {
-                if let Err(error) = state.config.jobs.complete(&job_id, &result) {
+                let store = state.config.jobs.clone();
+                let complete_id = job_id.clone();
+                if let Err(error) =
+                    blocking_store(move || store.complete(&complete_id, &result)).await
+                {
                     tracing::warn!(%job_id, %error, "failed to persist job result");
                 }
             }
             Ok(Err(error)) => {
-                if let Err(store_error) = state.config.jobs.fail(&job_id, &error.error_body()) {
-                    tracing::warn!(%job_id, %store_error, "failed to persist job failure");
-                }
+                fail_job(&state, &job_id, error.error_body()).await;
             }
             Err(error) => {
-                let body = ErrorBody::new("job_worker", error.to_string());
-                if let Err(store_error) = state.config.jobs.fail(&job_id, &body) {
-                    tracing::warn!(%job_id, %store_error, "failed to persist worker failure");
-                }
+                fail_job(
+                    &state,
+                    &job_id,
+                    ErrorBody::new("job_worker", error.to_string()),
+                )
+                .await;
             }
         }
     });
 }
 
+/// Removes a job's cancel handle from the registry when its worker finishes.
+struct CancelGuard {
+    state: AppState,
+    job_id: String,
+}
+
+impl Drop for CancelGuard {
+    fn drop(&mut self) {
+        self.state.unregister_cancel(&self.job_id);
+    }
+}
+
+async fn fail_job(state: &AppState, job_id: &str, body: ErrorBody) {
+    let store = state.config.jobs.clone();
+    let fail_id = job_id.to_string();
+    if let Err(store_error) = blocking_store(move || store.fail(&fail_id, &body)).await {
+        tracing::warn!(%job_id, %store_error, "failed to persist job failure");
+    }
+}
+
 impl AppState {
+    fn register_cancel(&self, job_id: &str) -> CancelFlag {
+        let flag = CancelFlag::new();
+        if let Ok(mut map) = self.job_cancels.lock() {
+            map.insert(job_id.to_string(), flag.clone());
+        }
+        flag
+    }
+
+    fn unregister_cancel(&self, job_id: &str) {
+        if let Ok(mut map) = self.job_cancels.lock() {
+            map.remove(job_id);
+        }
+    }
+
+    fn trip_cancel(&self, job_id: &str) {
+        if let Ok(map) = self.job_cancels.lock()
+            && let Some(flag) = map.get(job_id)
+        {
+            flag.cancel();
+        }
+    }
+
     fn authorize(&self, headers: &HeaderMap) -> Result<(), ApiError> {
         match &self.config.auth {
             AuthMode::None => Ok(()),
@@ -287,19 +405,20 @@ impl AppState {
     }
 }
 
-fn api_key_authorized(headers: &HeaderMap, token: &str) -> bool {
+fn api_key_authorized(headers: &HeaderMap, token: &AuthToken) -> bool {
     headers
         .get("x-beatbox-api-key")
         .and_then(|value| value.to_str().ok())
         .is_some_and(|actual| constant_time_eq(actual.as_bytes(), token.as_bytes()))
 }
 
-fn bearer_authorized(headers: &HeaderMap, token: &str) -> bool {
-    let expected = format!("Bearer {token}");
+fn bearer_authorized(headers: &HeaderMap, token: &AuthToken) -> bool {
+    let mut expected = b"Bearer ".to_vec();
+    expected.extend_from_slice(token.as_bytes());
     headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|actual| constant_time_eq(actual.as_bytes(), expected.as_bytes()))
+        .is_some_and(|actual| constant_time_eq(actual.as_bytes(), &expected))
 }
 
 #[derive(Debug)]
@@ -331,6 +450,13 @@ impl ApiError {
         Self {
             status: StatusCode::NOT_FOUND,
             body: ErrorBody::new("not_found", message),
+        }
+    }
+
+    fn conflict(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            body: ErrorBody::new(code, message),
         }
     }
 
@@ -415,6 +541,19 @@ async fn read_limited_body(state: &AppState, request: Request<Body>) -> Result<B
     to_bytes(request.into_body(), limit)
         .await
         .map_err(|error| ApiError::bad_request("body_limit", error.to_string()))
+}
+
+/// Run a synchronous job-store operation on a blocking thread so its
+/// `std::sync::Mutex` + SQLite I/O never stalls a tokio worker under contention.
+async fn blocking_store<T, F>(f: F) -> Result<T, JobStoreError>
+where
+    F: FnOnce() -> Result<T, JobStoreError> + Send + 'static,
+    T: Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(result) => result,
+        Err(join_error) => Err(JobStoreError::Worker(join_error.to_string())),
+    }
 }
 
 async fn execute_sync(
@@ -676,9 +815,10 @@ mod openapi_paths {
         tag = "v1",
         params(("id" = String, Path, description = "Job id")),
         responses(
-            (status = 204, description = "Canceled job"),
+            (status = 204, description = "Canceled job (or already canceled)"),
             (status = 401, description = "Missing or invalid bearer token"),
-            (status = 404, description = "Unknown job")
+            (status = 404, description = "Unknown job"),
+            (status = 409, description = "Job already finished and cannot be canceled")
         )
     )]
     pub fn cancel_job() {}
@@ -761,7 +901,7 @@ async fn mcp_post(State(state): State<AppState>, request: Request<Body>) -> Resp
             json!({"jsonrpc": "2.0", "error": {"code": -32600, "message": "origin not allowed"}}),
         );
     }
-    if state.config.auth.required()
+    if state.config.auth.is_required()
         && let Err(error) = state.authorize(&headers)
     {
         return json_response(
@@ -1077,11 +1217,15 @@ fn mcp_u64_arg(
 }
 
 fn tool_result(result: ExecutionResult) -> Result<Value, (i64, String)> {
+    // Per the MCP spec, a tool that fails must set isError so the calling agent
+    // can branch on it. A trap, fuel/wall timeout, OOM, or denied (e.g. an
+    // unavailable lane, or a host-import denial) is not a success.
+    let is_error = !matches!(result.status, ExecutionStatus::Ok);
     let text = serde_json::to_string(&result)
         .map_err(|error| (-32000, format!("failed to encode result: {error}")))?;
     Ok(json!({
         "content": [{"type": "text", "text": text}],
-        "isError": false,
+        "isError": is_error,
     }))
 }
 

@@ -15,6 +15,7 @@ pub enum Lane {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Policy {
     #[serde(default)]
     pub fs: FsPolicy,
@@ -33,6 +34,7 @@ pub struct Policy {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FsPolicy {
     #[serde(default)]
     pub workspace: Option<PathBuf>,
@@ -41,6 +43,7 @@ pub struct FsPolicy {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Mount {
     pub host: PathBuf,
     pub guest: PathBuf,
@@ -54,11 +57,15 @@ pub enum MountMode {
     Rw,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+// `Deny` is an empty *struct* variant (`Deny {}`), not a unit variant, because
+// serde silently ignores `deny_unknown_fields` on unit variants of an
+// internally-tagged enum — `{"kind":"deny","allow_domains":[...]}` would be
+// accepted and the extra keys dropped. An empty struct variant is validated, so
+// unknown keys on `deny` are rejected like every other variant.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum NetPolicy {
-    #[default]
-    Deny,
+    Deny {},
     Proxy {
         #[serde(default)]
         allow_domains: Vec<String>,
@@ -67,7 +74,14 @@ pub enum NetPolicy {
     },
 }
 
+impl Default for NetPolicy {
+    fn default() -> Self {
+        Self::Deny {}
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Secret {
     pub name: String,
     pub value_ref: String,
@@ -82,42 +96,84 @@ pub enum SecretExpose {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Limits {
+    #[serde(default = "default_wall_ms")]
     pub wall_ms: u64,
+    #[serde(default = "default_cpu_ms")]
     pub cpu_ms: u64,
+    #[serde(default = "default_memory_bytes")]
     pub memory_bytes: u64,
+    #[serde(default = "default_output_bytes")]
     pub output_bytes: u64,
+    #[serde(default = "default_pids")]
     pub pids: u32,
+    #[serde(default = "default_disk_bytes")]
     pub disk_bytes: u64,
+    #[serde(default = "default_fuel")]
     pub fuel: Option<u64>,
+}
+
+const fn default_wall_ms() -> u64 {
+    5_000
+}
+
+const fn default_cpu_ms() -> u64 {
+    5_000
+}
+
+const fn default_memory_bytes() -> u64 {
+    64 * 1024 * 1024
+}
+
+const fn default_output_bytes() -> u64 {
+    1024 * 1024
+}
+
+const fn default_pids() -> u32 {
+    1
+}
+
+const fn default_disk_bytes() -> u64 {
+    64 * 1024 * 1024
+}
+
+const fn default_fuel() -> Option<u64> {
+    Some(10_000_000)
 }
 
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            wall_ms: 5_000,
-            cpu_ms: 5_000,
-            memory_bytes: 64 * 1024 * 1024,
-            output_bytes: 1024 * 1024,
-            pids: 1,
-            disk_bytes: 64 * 1024 * 1024,
-            fuel: Some(10_000_000),
+            wall_ms: default_wall_ms(),
+            cpu_ms: default_cpu_ms(),
+            memory_bytes: default_memory_bytes(),
+            output_bytes: default_output_bytes(),
+            pids: default_pids(),
+            disk_bytes: default_disk_bytes(),
+            fuel: default_fuel(),
         }
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+// `Off` is an empty struct variant for the same reason as `NetPolicy::Deny`:
+// `deny_unknown_fields` is a no-op on unit variants of an internally-tagged
+// enum, so `{"kind":"off","seed":5}` would be silently accepted.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Determinism {
-    #[default]
-    Off,
-    Seeded {
-        seed: u64,
-        epoch_ms: u64,
-    },
+    Off {},
+    Seeded { seed: u64, epoch_ms: u64 },
+}
+
+impl Default for Determinism {
+    fn default() -> Self {
+        Self::Off {}
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExecuteRequest {
     pub lane: Lane,
     pub source: Source,
@@ -172,7 +228,7 @@ pub struct JobRecord {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Source {
     Inline { code: String },
     WasmFile { path: PathBuf },
@@ -266,6 +322,61 @@ mod tests {
         let decoded: Policy = serde_json::from_str(&encoded)?;
         assert_eq!(decoded, policy);
         Ok(())
+    }
+
+    #[test]
+    fn partial_limits_merge_onto_defaults() -> Result<(), serde_json::Error> {
+        let policy: Policy = serde_json::from_str(r#"{"limits": {"wall_ms": 1000}}"#)?;
+        assert_eq!(policy.limits.wall_ms, 1000);
+        // Untouched fields fall back to their defaults instead of failing to parse.
+        assert_eq!(policy.limits.cpu_ms, Limits::default().cpu_ms);
+        assert_eq!(policy.limits.memory_bytes, Limits::default().memory_bytes);
+        assert_eq!(policy.limits.fuel, Limits::default().fuel);
+        Ok(())
+    }
+
+    #[test]
+    fn unknown_policy_fields_are_rejected() {
+        // A typo'd top-level policy key must be an error, not a silent default.
+        assert!(serde_json::from_str::<Policy>(r#"{"double_jale": true}"#).is_err());
+        // A typo'd limits key must be rejected too.
+        assert!(serde_json::from_str::<Policy>(r#"{"limits": {"wall_mss": 1}}"#).is_err());
+    }
+
+    #[test]
+    fn unknown_fields_on_tagged_enum_unit_variants_are_rejected() -> Result<(), serde_json::Error> {
+        // Regression: deny_unknown_fields must also fire on the empty variants
+        // (`deny`, `off`), not just the struct-shaped ones.
+        assert!(serde_json::from_str::<NetPolicy>(r#"{"kind":"deny"}"#).is_ok());
+        assert!(
+            serde_json::from_str::<NetPolicy>(r#"{"kind":"deny","allow_domains":["x"]}"#).is_err()
+        );
+        assert!(serde_json::from_str::<Determinism>(r#"{"kind":"off"}"#).is_ok());
+        assert!(serde_json::from_str::<Determinism>(r#"{"kind":"off","seed":5}"#).is_err());
+        // Defaults and round-trips still hold with the empty-struct-variant shape.
+        assert_eq!(NetPolicy::default(), NetPolicy::Deny {});
+        assert_eq!(Determinism::default(), Determinism::Off {});
+        assert_eq!(
+            serde_json::to_string(&NetPolicy::default())?,
+            r#"{"kind":"deny"}"#
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unknown_request_and_source_fields_are_rejected() {
+        assert!(
+            serde_json::from_str::<ExecuteRequest>(
+                r#"{"lane": "wasm", "source": {"kind": "wasm_wat", "text": "(module)"}, "polcy": {}}"#
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<Source>(
+                r#"{"kind": "wasm_wat", "text": "(module)", "txt": "x"}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

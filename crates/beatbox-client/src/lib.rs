@@ -2,7 +2,7 @@ pub use beatbox_core::*;
 
 use std::time::Duration;
 
-use reqwest::StatusCode;
+use reqwest::{StatusCode, Url};
 use thiserror::Error;
 
 pub const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(65);
@@ -70,17 +70,36 @@ impl Client {
     }
 
     pub async fn get_job(&self, job_id: &str) -> Result<JobRecord, ClientError> {
-        let request = self.http.get(format!("{}/v1/jobs/{job_id}", self.base_url));
+        let request = self.http.get(self.job_url(job_id)?);
         let response = self.authorize(request).send().await?;
         decode_response(response).await
     }
 
     pub async fn cancel_job(&self, job_id: &str) -> Result<(), ClientError> {
-        let request = self
-            .http
-            .delete(format!("{}/v1/jobs/{job_id}", self.base_url));
+        let request = self.http.delete(self.job_url(job_id)?);
         let response = self.authorize(request).send().await?;
         decode_empty_response(response).await
+    }
+
+    /// Build the `/v1/jobs/{id}` URL with `job_id` percent-encoded as a single
+    /// path segment. Interpolating the id directly would let an id containing
+    /// `/`, `?`, or `#` retarget the request (e.g. `../execute`, `x?k=v`).
+    /// Empty and dot-segment ids (`""`, `.`, `..`) are rejected outright: the URL
+    /// crate treats `.`/`..` as relative navigation rather than a literal
+    /// segment, so encoding alone would not keep them under `/v1/jobs/`.
+    fn job_url(&self, job_id: &str) -> Result<Url, ClientError> {
+        if job_id.is_empty() || job_id == "." || job_id == ".." {
+            return Err(ClientError::InvalidUrl(format!(
+                "invalid job id: {job_id:?}"
+            )));
+        }
+        let mut url = Url::parse(&format!("{}/v1/jobs/", self.base_url))
+            .map_err(|error| ClientError::InvalidUrl(error.to_string()))?;
+        url.path_segments_mut()
+            .map_err(|()| ClientError::InvalidUrl("base URL cannot be a base".to_string()))?
+            .pop_if_empty()
+            .push(job_id);
+        Ok(url)
     }
 
     pub async fn openapi(&self) -> Result<serde_json::Value, ClientError> {
@@ -115,6 +134,8 @@ fn http_client_builder() -> reqwest::ClientBuilder {
 pub enum ClientError {
     #[error(transparent)]
     Http(#[from] reqwest::Error),
+    #[error("invalid URL: {0}")]
+    InvalidUrl(String),
     #[error("beatbox API returned {status}: {message}")]
     Api {
         status: StatusCode,
@@ -181,6 +202,42 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
+
+    #[test]
+    fn job_url_percent_encodes_untrusted_ids() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new("http://localhost:7300");
+
+        // A normal server-issued UUID passes through unchanged.
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let url = client.job_url(uuid)?;
+        assert_eq!(
+            url.as_str(),
+            format!("http://localhost:7300/v1/jobs/{uuid}")
+        );
+
+        // `../execute` must not climb out of /v1/jobs/ — the `/` is encoded so it
+        // stays a single segment (three literal slashes: /v1 /jobs /<id>).
+        let url = client.job_url("../execute")?;
+        assert_eq!(url.query(), None);
+        assert!(url.path().starts_with("/v1/jobs/"));
+        assert_eq!(url.path().matches('/').count(), 3);
+
+        // `x?k=v` must not smuggle a query string.
+        let url = client.job_url("x?k=v")?;
+        assert_eq!(url.query(), None);
+        assert_eq!(url.path().matches('/').count(), 3);
+
+        // Bare dot-segments and empty ids are rejected (url treats `.`/`..` as
+        // relative navigation, so they could otherwise reach /v1/jobs).
+        assert!(client.job_url("").is_err());
+        assert!(client.job_url(".").is_err());
+        assert!(client.job_url("..").is_err());
+
+        // A slash-bearing id stays one encoded segment even with dots present.
+        let url = client.job_url("a/b/..")?;
+        assert_eq!(url.path().matches('/').count(), 3);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn api_key_header_is_not_forwarded_across_redirects()
@@ -260,6 +317,7 @@ mod tests {
                 assert_eq!(status, StatusCode::TEMPORARY_REDIRECT);
             }
             ClientError::Http(error) => return Err(error.into()),
+            ClientError::InvalidUrl(message) => return Err(message.into()),
         }
 
         stop.store(true, Ordering::SeqCst);

@@ -28,6 +28,11 @@ enum Command {
         remote: Option<String>,
         #[arg(long, env = "BEATBOX_API_KEY")]
         api_key: Option<String>,
+        /// Read the API key from a file instead of --api-key/BEATBOX_API_KEY so
+        /// the secret never appears in `ps`/`/proc/*/cmdline` or shell history.
+        /// Takes precedence over --api-key/BEATBOX_API_KEY when both are set.
+        #[arg(long, env = "BEATBOX_API_KEY_FILE")]
+        api_key_file: Option<PathBuf>,
         #[arg(long = "policy")]
         policy: Vec<String>,
     },
@@ -47,8 +52,20 @@ async fn main() -> Result<()> {
             entrypoint,
             remote,
             api_key,
+            api_key_file,
             policy,
-        }) => run(path, input, entrypoint, remote, api_key, policy).await,
+        }) => {
+            run(
+                path,
+                input,
+                entrypoint,
+                remote,
+                api_key,
+                api_key_file,
+                policy,
+            )
+            .await
+        }
         Some(Command::Compile { input, output }) => compile(input, output),
         None => {
             Cli::command().print_help()?;
@@ -73,8 +90,10 @@ async fn run(
     entrypoint: Option<String>,
     remote: Option<String>,
     api_key: Option<String>,
+    api_key_file: Option<PathBuf>,
     policy_items: Vec<String>,
 ) -> Result<()> {
+    let api_key = resolve_api_key(api_key, api_key_file)?;
     let mut policy = Policy::default();
     apply_policy_items(&mut policy, &policy_items)?;
     let input = match input {
@@ -108,6 +127,27 @@ async fn run(
 
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
+}
+
+/// Resolve the API key, preferring the file when given. File precedence (rather
+/// than erroring on both) avoids a footgun: clap's `env` fallback populates the
+/// inline key from BEATBOX_API_KEY whether or not the user passed --api-key, so
+/// treating "both present" as an error would spuriously reject the common case
+/// of a leftover env var plus an explicit --api-key-file.
+fn resolve_api_key(inline: Option<String>, file: Option<PathBuf>) -> Result<Option<String>> {
+    match file {
+        Some(path) => {
+            let contents = fs::read_to_string(&path)
+                .with_context(|| format!("failed to read API key file {}", path.display()))?;
+            Ok(non_empty(contents))
+        }
+        None => Ok(inline.and_then(non_empty)),
+    }
+}
+
+fn non_empty(value: String) -> Option<String> {
+    let trimmed = value.trim().to_string();
+    (!trimmed.is_empty()).then_some(trimmed)
 }
 
 fn source_for_remote(path: &Path) -> Result<Source> {
@@ -153,6 +193,11 @@ fn apply_policy_items(policy: &mut Policy, items: &[String]) -> Result<()> {
                     .parse()
                     .context("deterministic_seed must be an integer")?;
                 policy.determinism = Determinism::Seeded { seed, epoch_ms: 0 };
+            }
+            "cpu_ms" | "pids" | "disk_bytes" => {
+                bail!(
+                    "policy key `{key}` is not enforceable by the wasm lane; it bounds compute via `fuel`/`wall_ms` and memory via `memory_bytes`"
+                );
             }
             other => bail!("unknown policy key `{other}`"),
         }
