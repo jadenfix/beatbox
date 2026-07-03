@@ -78,13 +78,19 @@ impl JobStore {
         // no worker and can never progress. Fail them (with a distinct code) so
         // GET /v1/jobs/{id} and idempotent retries observe a terminal state
         // instead of hanging forever on a wedged job.
+        //
+        // Also clear the idempotency_key on these rows: a `daemon_restarted`
+        // failure is an infrastructure event, not a real result, so a retry with
+        // the same key must be free to re-run the work. Jobs that reached a real
+        // terminal state keep their key (their result stays idempotent). The
+        // failed row remains retrievable by its own id.
         let now = now();
         let recovery_error = serde_json::to_string(&ErrorBody::new(
             "daemon_restarted",
             "daemon restarted before this job completed",
         ))?;
         conn.execute(
-            "UPDATE jobs SET status = ?1, error_json = ?2, updated_at = ?3 WHERE status IN (?4, ?5)",
+            "UPDATE jobs SET status = ?1, error_json = ?2, updated_at = ?3, idempotency_key = NULL WHERE status IN (?4, ?5)",
             params![
                 JobStatus::Failed.as_str(),
                 recovery_error,
@@ -446,30 +452,7 @@ mod tests {
 
         let id = store.create(&request())?;
         store.mark_running(&id)?;
-        let result = beatbox_core::ExecutionResult {
-            status: beatbox_core::ExecutionStatus::Ok,
-            value: json!(1),
-            exit_code: None,
-            stdout: String::new(),
-            stdout_truncated: false,
-            stderr: String::new(),
-            stderr_truncated: false,
-            error: None,
-            metrics: beatbox_core::Metrics::default(),
-            lane: Lane::Wasm,
-            deterministic: true,
-            inputs_digest: "sha256:test".to_string(),
-            engine_version: "test".to_string(),
-            beatbox_version: "test".to_string(),
-            effective_isolation: beatbox_core::EffectiveIsolation {
-                os: "test".to_string(),
-                mechanisms: Vec::new(),
-                landlock_abi: None,
-                downgrades: Vec::new(),
-            },
-            egress: Vec::new(),
-        };
-        store.complete(&id, &result)?;
+        store.complete(&id, &sample_result())?;
         // A succeeded job cannot be canceled.
         assert_eq!(store.cancel(&id)?, CancelOutcome::AlreadyTerminal);
         Ok(())
@@ -504,16 +487,21 @@ mod tests {
     }
 
     #[test]
-    fn idempotency_key_reuses_persisted_job_after_reopen() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn completed_job_idempotency_key_persists_across_reopen()
+    -> Result<(), Box<dyn std::error::Error>> {
         let db_path =
             std::env::temp_dir().join(format!("beatbox-jobs-{}.sqlite3", uuid::Uuid::new_v4()));
         let mut request = request();
         request.idempotency_key = Some("same-step".to_string());
 
+        // A job that reached a real terminal (succeeded) state keeps its key, so a
+        // retry after a restart dedupes to the same completed job.
         let first_id = {
             let store = JobStore::open(&db_path)?;
-            store.create(&request)?
+            let id = store.create(&request)?;
+            store.mark_running(&id)?;
+            store.complete(&id, &sample_result())?;
+            id
         };
         let second_id = {
             let store = JobStore::open(&db_path)?;
@@ -523,5 +511,66 @@ mod tests {
         assert_eq!(first_id, second_id);
         std::fs::remove_file(db_path).ok();
         Ok(())
+    }
+
+    #[test]
+    fn restart_recovery_releases_idempotency_key_for_retry()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let db_path =
+            std::env::temp_dir().join(format!("beatbox-jobs-{}.sqlite3", uuid::Uuid::new_v4()));
+        let mut request = request();
+        request.idempotency_key = Some("retry-me".to_string());
+
+        // A job left queued by a restart is recovered-as-failed and releases its
+        // key, so retrying the same key re-runs the work as a fresh job rather
+        // than returning the daemon_restarted failure forever.
+        let first_id = {
+            let store = JobStore::open(&db_path)?;
+            store.create(&request)?
+        };
+        let second_id = {
+            let store = JobStore::open(&db_path)?;
+            store.create(&request)?
+        };
+
+        assert_ne!(first_id, second_id, "retry should create a fresh job");
+        let store = JobStore::open(&db_path)?;
+        // The original is still retrievable by id and is the daemon_restarted failure.
+        let original = store
+            .get(&first_id)?
+            .ok_or_else(|| std::io::Error::other("original job should still exist"))?;
+        assert_eq!(original.status, beatbox_core::JobStatus::Failed);
+        assert_eq!(
+            original.error.as_ref().map(|error| error.code.as_str()),
+            Some("daemon_restarted")
+        );
+        std::fs::remove_file(db_path).ok();
+        Ok(())
+    }
+
+    fn sample_result() -> beatbox_core::ExecutionResult {
+        beatbox_core::ExecutionResult {
+            status: beatbox_core::ExecutionStatus::Ok,
+            value: json!(1),
+            exit_code: None,
+            stdout: String::new(),
+            stdout_truncated: false,
+            stderr: String::new(),
+            stderr_truncated: false,
+            error: None,
+            metrics: beatbox_core::Metrics::default(),
+            lane: Lane::Wasm,
+            deterministic: true,
+            inputs_digest: "sha256:test".to_string(),
+            engine_version: "test".to_string(),
+            beatbox_version: "test".to_string(),
+            effective_isolation: beatbox_core::EffectiveIsolation {
+                os: "test".to_string(),
+                mechanisms: Vec::new(),
+                landlock_abi: None,
+                downgrades: Vec::new(),
+            },
+            egress: Vec::new(),
+        }
     }
 }
