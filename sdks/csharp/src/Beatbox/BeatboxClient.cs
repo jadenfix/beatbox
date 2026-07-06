@@ -94,6 +94,15 @@ public sealed class BeatboxClient : IDisposable
         return await ReadJsonAsync<JsonElement>(response, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>POST <c>/v1/browser/adapter/register</c>. Returns browser adapter registration JSON.</summary>
+    public async Task<JsonElement> RegisterBrowserAdapterAsync(JsonElement request, CancellationToken cancellationToken = default)
+    {
+        using var content = JsonContent(request);
+        using var response = await SendAsync(HttpMethod.Post, "/v1/browser/adapter/register", auth: true, content, cancellationToken)
+            .ConfigureAwait(false);
+        return await ReadJsonAsync<JsonElement>(response, cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>POST <c>/v1/browser/adapter/validate</c>. Returns browser adapter manifest validation JSON.</summary>
     public async Task<JsonElement> ValidateBrowserAdapterAsync(JsonElement request, CancellationToken cancellationToken = default)
     {

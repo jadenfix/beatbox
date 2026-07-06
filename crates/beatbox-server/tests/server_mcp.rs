@@ -3,8 +3,8 @@ use axum::http::header::ORIGIN;
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode};
 use beatbox_core::{
     BrowserAdapterConformanceExpectation, BrowserAdapterContractResponse,
-    BrowserAdapterManifestResponse, BrowserAdmissionDecision, BrowserAdmissionRequest,
-    BrowserArtifactMode, BrowserCredentialMode, BrowserProfilesResponse,
+    BrowserAdapterManifestResponse, BrowserAdapterRegistrationResponse, BrowserAdmissionDecision,
+    BrowserAdmissionRequest, BrowserArtifactMode, BrowserCredentialMode, BrowserProfilesResponse,
     BrowserSandboxAvailability, BrowserSandboxControl, BrowserSandboxLevel, BrowserSensitivity,
     BrowserSessionActor, CreateJobResponse, ErrorResponse, ExecuteRequest, ExecutionResult,
     ExecutionStatus, JobRecord, JobStatus, Lane, Policy, Source,
@@ -65,6 +65,15 @@ fn complete_adapter_manifest() -> serde_json::Value {
             "plaintext artifacts outside the explicit allowlist removed",
             "egress proxy log sealed or discarded according to artifact_mode"
         ]
+    })
+}
+
+fn complete_adapter_registration() -> serde_json::Value {
+    json!({
+        "actor": "agent",
+        "sensitivity": "sensitive",
+        "same_user_capability": "test-capability-fixture",
+        "manifest": complete_adapter_manifest()
     })
 }
 
@@ -1379,6 +1388,150 @@ async fn browser_adapter_contract_discovery_is_authenticated_and_fail_closed()
 }
 
 #[tokio::test]
+async fn browser_adapter_registration_is_authenticated_fail_closed_and_non_echoing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut config = ServerConfig::new(BeatboxEngine::new()?);
+    config.auth = AuthMode::required("secret")?;
+    let app = router(config);
+    let registration = complete_adapter_registration();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/browser/adapter/register")
+                .header("content-type", "application/json")
+                .body(Body::from(registration.to_string()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/browser/adapter/register")
+                .header("content-type", "application/json")
+                .header("x-beatbox-api-key", "secret")
+                .body(Body::from(registration.to_string()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let raw = String::from_utf8(body.to_vec())?;
+    assert!(!raw.contains("test-capability-fixture"));
+    assert!(!raw.contains("same_user_capability\":"));
+    let registration: BrowserAdapterRegistrationResponse = serde_json::from_str(&raw)?;
+    assert_eq!(registration.adapter_id, "tempo-os-jail-v1");
+    assert_eq!(registration.actor, BrowserSessionActor::Agent);
+    assert_eq!(registration.sensitivity, BrowserSensitivity::Sensitive);
+    assert!(!registration.registered);
+    assert!(!registration.launchable);
+    assert!(!registration.trusted_for_sensitive_work);
+    assert!(!registration.endpoint_network_policy_bound);
+    assert!(!registration.same_user_capability_bound);
+    assert!(!registration.manifest_validation.manifest_complete);
+    assert!(!registration.manifest_validation.launchable);
+    assert!(
+        registration
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("does not persist or trust adapters yet"))
+    );
+    assert!(
+        registration
+            .required_next_steps
+            .iter()
+            .any(|step| step.contains("same-user capability"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn browser_adapter_registration_rejects_invalid_capability()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = router(ServerConfig::new(BeatboxEngine::new()?));
+    let mut registration = complete_adapter_registration();
+    registration["same_user_capability"] = json!(" test-capability-fixture ");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/browser/adapter/register")
+                .header("content-type", "application/json")
+                .body(Body::from(registration.to_string()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let raw = String::from_utf8(body.to_vec())?;
+    assert!(!raw.contains("test-capability-fixture"));
+    let error: ErrorResponse = serde_json::from_str(&raw)?;
+    assert_eq!(error.error.code, "invalid_browser_adapter_registration");
+    assert!(
+        error
+            .error
+            .message
+            .contains("same_user_capability must be non-empty")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn browser_adapter_registration_errors_do_not_echo_capability_or_endpoint_secret()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = router(ServerConfig::new(BeatboxEngine::new()?));
+    let mut registration = complete_adapter_registration();
+    registration["manifest"]["launch_endpoint"] =
+        json!("https://adapter.example/launch?token=endpoint-fixture");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/browser/adapter/register")
+                .header("content-type", "application/json")
+                .body(Body::from(registration.to_string()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let raw = String::from_utf8(body.to_vec())?;
+    assert!(!raw.contains("test-capability-fixture"));
+    assert!(!raw.contains("endpoint-fixture"));
+    assert!(!raw.contains("adapter.example/launch"));
+    let error: ErrorResponse = serde_json::from_str(&raw)?;
+    assert_eq!(error.error.code, "invalid_browser_adapter_registration");
+    assert!(error.error.message.contains("query or fragment components"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn browser_adapter_registration_rejects_unknown_request_fields()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = router(ServerConfig::new(BeatboxEngine::new()?));
+    let mut registration = complete_adapter_registration();
+    registration["unexpected"] = json!("ignored");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/browser/adapter/register")
+                .header("content-type", "application/json")
+                .body(Body::from(registration.to_string()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let raw = String::from_utf8(body.to_vec())?;
+    assert!(!raw.contains("test-capability-fixture"));
+    let error: ErrorResponse = serde_json::from_str(&raw)?;
+    assert_eq!(error.error.code, "invalid_json");
+    assert!(error.error.message.contains("unexpected"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn browser_adapter_conformance_profile_cases_match_rest_and_mcp()
 -> Result<(), Box<dyn std::error::Error>> {
     let app = router(ServerConfig::new(BeatboxEngine::new()?));
@@ -1561,7 +1714,10 @@ async fn browser_adapter_manifest_rejects_unsafe_launch_endpoints()
             .await?;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = to_bytes(response.into_body(), usize::MAX).await?;
-        let error: ErrorResponse = serde_json::from_slice(&body)?;
+        let raw = String::from_utf8(body.to_vec())?;
+        assert!(!raw.contains(endpoint));
+        assert!(!raw.contains("token=secret"));
+        let error: ErrorResponse = serde_json::from_str(&raw)?;
         assert_eq!(error.error.code, "invalid_browser_adapter_manifest");
     }
     Ok(())
@@ -1728,6 +1884,7 @@ async fn openapi_lists_jobs_surface() -> Result<(), Box<dyn std::error::Error>> 
                 && paths.contains_key("/v1/browser/profiles")
                 && paths.contains_key("/v1/browser/admit")
                 && paths.contains_key("/v1/browser/adapter/contract")
+                && paths.contains_key("/v1/browser/adapter/register")
                 && paths.contains_key("/v1/browser/adapter/validate"))
     );
 
@@ -1754,6 +1911,9 @@ async fn openapi_lists_jobs_surface() -> Result<(), Box<dyn std::error::Error>> 
         "BrowserAdapterConformanceProfile",
         "BrowserAdapterManifestRequest",
         "BrowserAdapterManifestResponse",
+        "BrowserAdapterRegistrationDecision",
+        "BrowserAdapterRegistrationRequest",
+        "BrowserAdapterRegistrationResponse",
         "BrowserAdapterValidationDecision",
         "BrowserSandboxLevel",
         "BrowserSandboxAvailability",
@@ -1804,6 +1964,22 @@ async fn openapi_lists_jobs_surface() -> Result<(), Box<dyn std::error::Error>> 
                     && required.iter().any(|field| field == "launchable")
             ),
         "adapter contract response should require discovery metadata"
+    );
+    assert_eq!(
+        schemas["BrowserAdapterRegistrationRequest"]["properties"]["same_user_capability"]["maxLength"],
+        256
+    );
+    assert!(
+        schemas["BrowserAdapterRegistrationResponse"]["required"]
+            .as_array()
+            .is_some_and(
+                |required| required.iter().any(|field| field == "registered")
+                    && required
+                        .iter()
+                        .any(|field| field == "same_user_capability_bound")
+                    && required.iter().any(|field| field == "manifest_validation")
+            ),
+        "adapter registration response should require fail-closed registration metadata"
     );
     assert!(
         schemas["BrowserAdapterManifestResponse"]["required"]
@@ -1909,6 +2085,7 @@ async fn mcp_lists_tools() -> Result<(), Box<dyn std::error::Error>> {
     assert!(tools.to_string().contains("get_browser_profiles"));
     assert!(tools.to_string().contains("admit_browser_session"));
     assert!(tools.to_string().contains("get_browser_adapter_contract"));
+    assert!(tools.to_string().contains("register_browser_adapter"));
     assert!(tools.to_string().contains("validate_browser_adapter"));
     let contract_tool = tools
         .as_array()
@@ -1921,6 +2098,26 @@ async fn mcp_lists_tools() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(
         contract_tool["inputSchema"]["additionalProperties"],
         serde_json::json!(false)
+    );
+    let register_tool = tools
+        .as_array()
+        .and_then(|tools| {
+            tools
+                .iter()
+                .find(|tool| tool["name"] == "register_browser_adapter")
+        })
+        .ok_or("register_browser_adapter tool should be listed")?;
+    assert_eq!(
+        register_tool["inputSchema"]["required"],
+        serde_json::json!(["actor", "sensitivity", "same_user_capability", "manifest"])
+    );
+    assert_eq!(
+        register_tool["inputSchema"]["properties"]["manifest"]["additionalProperties"],
+        serde_json::json!(false)
+    );
+    assert_eq!(
+        register_tool["inputSchema"]["properties"]["manifest"]["properties"]["adapter_id"]["maxLength"],
+        128
     );
     let validate_tool = tools
         .as_array()
@@ -2466,6 +2663,107 @@ async fn mcp_get_browser_adapter_contract_rejects_unknown_arguments()
         "params": {
             "name": "get_browser_adapter_contract",
             "arguments": {"adapter_id": "tempo-os-jail-v1"}
+        }
+    });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/mcp")
+                .header("content-type", "application/json")
+                .body(Body::from(request.to_string()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let value: serde_json::Value = serde_json::from_slice(&body)?;
+    assert_eq!(value["error"]["code"], serde_json::json!(-32602));
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("does not accept argument"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_register_browser_adapter_returns_structured_rejection_without_capability_echo()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = router(ServerConfig::new(BeatboxEngine::new()?));
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "register_browser_adapter",
+            "arguments": complete_adapter_registration()
+        }
+    });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/mcp")
+                .header("content-type", "application/json")
+                .body(Body::from(request.to_string()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let raw = String::from_utf8(body.to_vec())?;
+    assert!(!raw.contains("test-capability-fixture"));
+    assert!(!raw.contains("same_user_capability\":"));
+    let value: serde_json::Value = serde_json::from_str(&raw)?;
+    let result = &value["result"];
+    assert_eq!(result["isError"], serde_json::json!(true));
+    assert_eq!(
+        result["content"][0]["text"],
+        "beatbox browser adapter registration preflight"
+    );
+    assert_eq!(result["structuredContent"]["decision"], "rejected");
+    assert_eq!(
+        result["structuredContent"]["adapter_id"],
+        "tempo-os-jail-v1"
+    );
+    assert_eq!(result["structuredContent"]["actor"], "agent");
+    assert_eq!(result["structuredContent"]["sensitivity"], "sensitive");
+    assert_eq!(result["structuredContent"]["registered"], false);
+    assert_eq!(result["structuredContent"]["launchable"], false);
+    assert_eq!(
+        result["structuredContent"]["same_user_capability_bound"],
+        false
+    );
+    assert_eq!(
+        result["structuredContent"]["manifest_validation"]["launchable"],
+        false
+    );
+    assert_eq!(
+        result["structuredContent"]["manifest_validation"]["endpoint_network_policy_bound"],
+        false
+    );
+    assert!(
+        result["structuredContent"]["required_next_steps"]
+            .as_array()
+            .is_some_and(|steps| steps.iter().any(|step| step
+                .as_str()
+                .is_some_and(|step| step.contains("same-user capability"))))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_register_browser_adapter_rejects_unknown_arguments()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = router(ServerConfig::new(BeatboxEngine::new()?));
+    let mut registration = complete_adapter_registration();
+    registration["secret_note"] = json!("ignored");
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "register_browser_adapter",
+            "arguments": registration
         }
     });
     let response = app

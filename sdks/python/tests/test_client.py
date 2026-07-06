@@ -374,6 +374,96 @@ class TestClientRequest(unittest.TestCase):
             "browser-adapter-conformance-v1",
         )
 
+    def test_browser_adapter_register_sends_auth_json(self):
+        c = Client("http://host:7300/", api_key="secret-key")
+        captured = {}
+
+        def fake_open(req, timeout=None):
+            captured["req"] = req
+            body = {
+                "decision": "rejected",
+                "adapter_id": "tempo-os-jail-v1",
+                "actor": "agent",
+                "sensitivity": "sensitive",
+                "registered": False,
+                "launchable": False,
+                "trusted_for_sensitive_work": False,
+                "endpoint_network_policy_bound": False,
+                "same_user_capability_bound": False,
+                "manifest_validation": {
+                    "decision": "rejected",
+                    "manifest_complete": False,
+                    "launchable": False,
+                    "trusted_for_sensitive_work": False,
+                    "adapter_id": "tempo-os-jail-v1",
+                    "launch_endpoint": "https://adapter.example/launch",
+                    "endpoint_network_policy_bound": False,
+                    "missing_levels": [],
+                    "missing_controls": [],
+                    "missing_guard_fields": [],
+                    "missing_completion_proofs": [],
+                    "reasons": ["validation metadata only"],
+                    "required_next_steps": ["implement registration"],
+                    "adapter_contract": {
+                        "version": "browser-adapter-v1",
+                        "status": "planned",
+                        "launch_endpoint": None,
+                        "handoff_fields": ["guard_plan"],
+                        "required_guard_fields": ["guard_plan.network.deny_metadata_endpoints"],
+                        "required_completion_proofs": ["temporary profile directory removed"],
+                        "unavailable_reason": "no browser adapter launch endpoint is implemented by this daemon",
+                    },
+                    "conformance_profile": {
+                        "profile_version": "browser-adapter-conformance-v1",
+                        "field_complete_manifest": {
+                            "adapter_id": "tempo-conformance-adapter-v1",
+                            "contract_version": "browser-adapter-v1",
+                            "launch_endpoint": "https://adapter.example/launch",
+                            "supported_levels": ["os_isolated"],
+                            "supported_controls": ["os_process_isolation"],
+                            "guard_fields": ["guard_plan.network.deny_metadata_endpoints"],
+                            "completion_proofs": ["temporary profile directory removed"],
+                        },
+                        "field_complete_expectation": {
+                            "decision": "rejected",
+                            "manifest_complete": False,
+                            "launchable": False,
+                            "trusted_for_sensitive_work": False,
+                            "endpoint_network_policy_bound": False,
+                            "missing_levels": [],
+                            "missing_controls": [],
+                            "missing_guard_fields": [],
+                            "missing_completion_proofs": [],
+                        },
+                        "required_cases": [],
+                        "notes": ["not a launch grant"],
+                    },
+                },
+                "reasons": ["does not persist or trust adapters yet"],
+                "required_next_steps": ["issue a same-user capability"],
+            }
+            return _FakeResponse(200, json.dumps(body).encode())
+
+        request = {
+            "actor": "agent",
+            "sensitivity": "sensitive",
+            "same_user_capability": "test-capability-fixture",
+            "manifest": {"adapter_id": "tempo-os-jail-v1"},
+        }
+        with _patched_open(c, fake_open):
+            registration = c.browser_adapter_register(request)
+
+        req = captured["req"]
+        self.assertEqual(req.full_url, "http://host:7300/v1/browser/adapter/register")
+        self.assertEqual(req.get_method(), "POST")
+        self.assertEqual(req.get_header("X-beatbox-api-key"), "secret-key")
+        self.assertEqual(req.get_header("Content-type"), "application/json")
+        self.assertEqual(json.loads(req.data.decode()), request)
+        self.assertFalse(registration["registered"])
+        self.assertFalse(registration["launchable"])
+        self.assertFalse(registration["same_user_capability_bound"])
+        self.assertFalse(registration["manifest_validation"]["launchable"])
+
     def test_cancel_job_204_returns_none(self):
         c = Client("http://host:7300")
 

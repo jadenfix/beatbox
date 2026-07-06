@@ -31,6 +31,7 @@ the same methods:
 | `browser_profiles` / `browserProfiles` | `GET /v1/browser/profiles` | yes |
 | `browser_admit` / `admitBrowserSession` | `POST /v1/browser/admit` | yes |
 | `browser_adapter_contract` / `browserAdapterContract` | `GET /v1/browser/adapter/contract` | yes |
+| `browser_adapter_register` / `registerBrowserAdapter` | `POST /v1/browser/adapter/register` | yes |
 | `validate_browser_adapter` / `validateBrowserAdapter` | `POST /v1/browser/adapter/validate` | yes |
 | `execute` | `POST /v1/execute` | yes |
 | `create_job` | `POST /v1/jobs` | yes |
@@ -55,18 +56,24 @@ Browser adapter manifests are also raw JSON today. Pass them through to
 syntax-checks the launch endpoint, but does not resolve or bind that endpoint
 to DNS/proxy/redirect/retry policy. SDKs also expose
 `GET /v1/browser/adapter/contract` for direct discovery of the planned adapter
-contract and conformance profile without submitting a manifest. Both responses
-still return `endpoint_network_policy_bound: false` and `launchable: false`
-until a trusted adapter registration and launch path exists. Preserve the
-`conformance_profile` field in raw JSON responses; it contains the canonical
-field-complete manifest, expected missing-gap reports, and protocol-specific
-REST/MCP negative cases Tempo adapters should run.
+contract and conformance profile without submitting a manifest, and
+`POST /v1/browser/adapter/register` for the future registration preflight with
+actor, sensitivity, a same-user capability candidate, and manifest in one
+request. Beatbox does not issue, verify, persist, or echo that capability yet.
+All adapter registration/validation responses still return
+`endpoint_network_policy_bound: false` and `launchable: false` until a trusted
+adapter registration and launch path exists. Preserve the `conformance_profile`
+field in raw JSON responses; it contains the canonical field-complete manifest,
+expected missing-gap reports, and protocol-specific REST/MCP negative cases
+Tempo adapters should run.
 
 Language-specific method names are idiomatic: Rust and Python expose
-`browser_adapter_contract` and `browser_adapter_validate`, Ruby exposes
-`browser_adapter_contract` and `validate_browser_adapter`, TypeScript, Java,
-PHP, and C# expose `browserAdapterContract` and `validateBrowserAdapter`, and
-Go exposes `BrowserAdapterContract` and `ValidateBrowserAdapter`.
+`browser_adapter_contract`, `browser_adapter_register`, and
+`browser_adapter_validate`; Ruby exposes `browser_adapter_contract`,
+`browser_adapter_register`, and `validate_browser_adapter`; TypeScript, Java,
+PHP, and C# expose `browserAdapterContract`, `registerBrowserAdapter`, and
+`validateBrowserAdapter`; and Go exposes `BrowserAdapterContract`,
+`RegisterBrowserAdapter`, and `ValidateBrowserAdapter`.
 
 ## How the fleet stays correct (the rollout pipeline)
 
