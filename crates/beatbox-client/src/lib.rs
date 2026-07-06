@@ -228,7 +228,7 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{mpsc, Arc};
+    use std::sync::{Arc, mpsc};
     use std::time::{Duration, Instant};
 
     use super::*;
@@ -277,8 +277,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn browser_admit_posts_authenticated_json_preflight(
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn browser_admit_posts_authenticated_json_preflight()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let addr = listener.local_addr()?;
         let (request_tx, request_rx) = mpsc::channel();
@@ -329,8 +329,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn api_key_header_is_not_forwarded_across_redirects(
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn api_key_header_is_not_forwarded_across_redirects()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;

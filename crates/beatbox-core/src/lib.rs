@@ -526,10 +526,12 @@ mod tests {
             r#"{"lane": "wasm", "source": {"kind": "wasm_wat", "text": "(module)"}, "polcy": {}}"#
         )
         .is_err());
-        assert!(serde_json::from_str::<Source>(
-            r#"{"kind": "wasm_wat", "text": "(module)", "txt": "x"}"#
-        )
-        .is_err());
+        assert!(
+            serde_json::from_str::<Source>(
+                r#"{"kind": "wasm_wat", "text": "(module)", "txt": "x"}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

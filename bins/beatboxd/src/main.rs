@@ -2,9 +2,9 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use beatbox_engine::BeatboxEngine;
-use beatbox_server::{router, AuthMode, ServerConfig};
+use beatbox_server::{AuthMode, ServerConfig, router};
 use clap::Parser;
 
 #[derive(Parser)]
