@@ -80,6 +80,17 @@ final class Client
         return $this->requestJson('POST', '/v1/browser/admit', $request, true);
     }
 
+    /**
+     * POST /v1/browser/adapter/validate. Returns browser adapter validation JSON.
+     *
+     * @param array<string,mixed> $request
+     * @return array<string,mixed>
+     */
+    public function validateBrowserAdapter(array $request): array
+    {
+        return $this->requestJson('POST', '/v1/browser/adapter/validate', $request, true);
+    }
+
     /** POST /v1/execute — run a program synchronously. */
     public function execute(ExecuteRequest $request): ExecutionResult
     {

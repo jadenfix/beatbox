@@ -115,6 +115,14 @@ func (c *Client) AdmitBrowserSession(ctx context.Context, req any) (json.RawMess
 	return out, err
 }
 
+// ValidateBrowserAdapter validates a proposed browser adapter manifest without
+// trusting or launching it (POST /v1/browser/adapter/validate).
+func (c *Client) ValidateBrowserAdapter(ctx context.Context, req any) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := c.do(ctx, http.MethodPost, c.baseURL+"/v1/browser/adapter/validate", true, req, &out)
+	return out, err
+}
+
 // Execute runs the request synchronously (POST /v1/execute) and returns the
 // ExecutionResult.
 func (c *Client) Execute(ctx context.Context, req ExecuteRequest) (*ExecutionResult, error) {

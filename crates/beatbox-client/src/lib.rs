@@ -85,6 +85,18 @@ impl Client {
         decode_response(response).await
     }
 
+    pub async fn browser_adapter_validate(
+        &self,
+        request: &BrowserAdapterManifestRequest,
+    ) -> Result<BrowserAdapterManifestResponse, ClientError> {
+        let request_builder = self
+            .http
+            .post(format!("{}/v1/browser/adapter/validate", self.base_url))
+            .json(request);
+        let response = self.authorize(request_builder).send().await?;
+        decode_response(response).await
+    }
+
     pub async fn execute(&self, request: &ExecuteRequest) -> Result<ExecutionResult, ClientError> {
         let request_builder = self
             .http
@@ -377,6 +389,65 @@ mod tests {
                 .iter()
                 .any(|field| field == "guard_plan")
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn browser_adapter_validate_posts_authenticated_json()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let addr = listener.local_addr()?;
+        let (request_tx, request_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || -> std::io::Result<()> {
+            let (mut stream, _) = listener.accept()?;
+            stream.set_read_timeout(Some(Duration::from_secs(1)))?;
+            let mut buffer = [0_u8; 4096];
+            let bytes = stream.read(&mut buffer)?;
+            let request = String::from_utf8_lossy(&buffer[..bytes]).to_string();
+            request_tx
+                .send(request)
+                .map_err(|_| std::io::Error::other("request receiver dropped"))?;
+            let body = r#"{"decision":"rejected","manifest_complete":false,"launchable":false,"trusted_for_sensitive_work":false,"adapter_id":"tempo-os-jail-v1","launch_endpoint":"https://adapter.example/launch","endpoint_network_policy_bound":false,"missing_levels":[],"missing_controls":[],"missing_guard_fields":[],"missing_completion_proofs":[],"reasons":["no trusted adapter registration, endpoint binding, or launch path is implemented"],"required_next_steps":["implement authenticated adapter registration"],"adapter_contract":{"version":"browser-adapter-v1","status":"planned","launch_endpoint":null,"handoff_fields":["guard_plan"],"required_guard_fields":["guard_plan.network.deny_metadata_endpoints"],"required_completion_proofs":["temporary profile directory removed"],"unavailable_reason":"no browser adapter launch endpoint is implemented by this daemon"}}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes())?;
+            Ok(())
+        });
+
+        let client = Client::new(format!("http://{addr}")).with_api_key("secret");
+        let validation = client
+            .browser_adapter_validate(&BrowserAdapterManifestRequest {
+                adapter_id: "tempo-os-jail-v1".to_string(),
+                contract_version: "browser-adapter-v1".to_string(),
+                launch_endpoint: Some("https://adapter.example/launch".to_string()),
+                supported_levels: vec![BrowserSandboxLevel::OsIsolated],
+                supported_controls: vec![BrowserSandboxControl::OsProcessIsolation],
+                guard_fields: vec!["guard_plan.network.deny_metadata_endpoints".to_string()],
+                completion_proofs: vec!["temporary profile directory removed".to_string()],
+            })
+            .await?;
+
+        match server.join() {
+            Ok(result) => result?,
+            Err(_) => return Err("adapter validation test server panicked".into()),
+        }
+        let request = request_rx.recv_timeout(Duration::from_secs(1))?;
+        assert!(request.starts_with("POST /v1/browser/adapter/validate "));
+        assert!(request.contains("x-beatbox-api-key: secret"));
+        assert!(request.contains("content-type: application/json"));
+        assert!(request.contains(r#""adapter_id":"tempo-os-jail-v1""#));
+        assert!(request.contains(r#""launch_endpoint":"https://adapter.example/launch""#));
+        assert_eq!(
+            validation.decision,
+            BrowserAdapterValidationDecision::Rejected
+        );
+        assert!(!validation.manifest_complete);
+        assert!(!validation.launchable);
+        assert!(!validation.trusted_for_sensitive_work);
+        assert!(!validation.endpoint_network_policy_bound);
         Ok(())
     }
 

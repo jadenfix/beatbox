@@ -36,6 +36,7 @@ A client is constructed with:
 | `capabilities()` | `GET /v1/capabilities` | yes | raw JSON |
 | `browser_profiles()` | `GET /v1/browser/profiles` | yes | raw JSON |
 | `browser_admit(request)` | `POST /v1/browser/admit` | yes | raw JSON |
+| `browser_adapter_validate` / `validate_browser_adapter` / `validateBrowserAdapter` / `ValidateBrowserAdapter` | `POST /v1/browser/adapter/validate` | yes | raw JSON |
 | `execute(request)` | `POST /v1/execute` | yes | `ExecutionResult` |
 | `create_job(request)` | `POST /v1/jobs` | yes | `CreateJobResponse` (`202`) |
 | `get_job(job_id)` | `GET /v1/jobs/{id}` | yes | `JobRecord` |
@@ -77,7 +78,8 @@ Mirror these components from `openapi.json`: `CapabilitiesResponse`,
 `required_controls`, profile `controls`, `missing_controls`, and
 `intent_warnings`, plus the browser admission `guard_plan` and
 `adapter_handoff`; raw JSON return is acceptable until each language adds typed
-convenience models),
+convenience models), `BrowserAdapterManifestRequest`,
+`BrowserAdapterManifestResponse`, `BrowserAdapterValidationDecision`,
 `ExecutionResult` (status, value,
 stdout/stderr, error, `metrics`, `deterministic`, `inputs_digest`,
 `effective_isolation`, ...), `Metrics` (`wall_time_ms`, **`cpu_time_ms` nullable**,

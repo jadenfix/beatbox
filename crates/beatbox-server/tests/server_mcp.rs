@@ -2,10 +2,11 @@ use axum::body::{Body, to_bytes};
 use axum::http::header::ORIGIN;
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode};
 use beatbox_core::{
-    BrowserAdmissionDecision, BrowserAdmissionRequest, BrowserArtifactMode, BrowserCredentialMode,
-    BrowserProfilesResponse, BrowserSandboxAvailability, BrowserSandboxControl,
-    BrowserSandboxLevel, BrowserSensitivity, BrowserSessionActor, CreateJobResponse, ErrorResponse,
-    ExecuteRequest, ExecutionResult, ExecutionStatus, JobRecord, JobStatus, Lane, Policy, Source,
+    BrowserAdapterManifestResponse, BrowserAdmissionDecision, BrowserAdmissionRequest,
+    BrowserArtifactMode, BrowserCredentialMode, BrowserProfilesResponse,
+    BrowserSandboxAvailability, BrowserSandboxControl, BrowserSandboxLevel, BrowserSensitivity,
+    BrowserSessionActor, CreateJobResponse, ErrorResponse, ExecuteRequest, ExecutionResult,
+    ExecutionStatus, JobRecord, JobStatus, Lane, Policy, Source,
 };
 use beatbox_engine::BeatboxEngine;
 use beatbox_server::{
@@ -14,6 +15,57 @@ use beatbox_server::{
 };
 use serde_json::json;
 use tower::ServiceExt;
+
+fn complete_adapter_manifest() -> serde_json::Value {
+    json!({
+        "adapter_id": "tempo-os-jail-v1",
+        "contract_version": "browser-adapter-v1",
+        "launch_endpoint": "https://adapter.example/launch",
+        "supported_levels": [
+            "ephemeral_profile",
+            "network_suppressed",
+            "sealed_state",
+            "os_isolated",
+            "remote_isolated"
+        ],
+        "supported_controls": [
+            "fresh_profile",
+            "no_ambient_credentials",
+            "egress_policy",
+            "local_network_block",
+            "sealed_artifacts",
+            "os_process_isolation",
+            "remote_worker_isolation",
+            "teardown_proof"
+        ],
+        "guard_fields": [
+            "guard_plan.network.allowed_origins",
+            "guard_plan.network.deny_private_networks",
+            "guard_plan.network.deny_localhost",
+            "guard_plan.network.deny_metadata_endpoints",
+            "guard_plan.network.require_dns_rebinding_protection",
+            "guard_plan.network.require_redirect_revalidation",
+            "guard_plan.network.require_proxy_enforcement",
+            "guard_plan.network.outbound_network_disabled_without_proxy",
+            "guard_plan.credentials.mode",
+            "guard_plan.credentials.ambient_credentials_allowed",
+            "guard_plan.credentials.user_mediation_required",
+            "guard_plan.credentials.scoped_secret_channel_required",
+            "guard_plan.storage.mode",
+            "guard_plan.storage.plaintext_persistence_allowed",
+            "guard_plan.storage.explicit_artifact_allowlist_required",
+            "guard_plan.storage.encryption_required_for_persistence",
+            "guard_plan.storage.teardown_proof_required",
+            "guard_plan.required_runtime_guards"
+        ],
+        "completion_proofs": [
+            "browser process exited or was killed",
+            "temporary profile directory removed",
+            "plaintext artifacts outside the explicit allowlist removed",
+            "egress proxy log sealed or discarded according to artifact_mode"
+        ]
+    })
+}
 
 #[tokio::test]
 async fn v1_execute_runs_wasm() -> Result<(), Box<dyn std::error::Error>> {
@@ -1083,6 +1135,179 @@ async fn browser_admission_rejects_unknown_request_fields() -> Result<(), Box<dy
 }
 
 #[tokio::test]
+async fn browser_adapter_manifest_validation_is_authenticated_and_fail_closed()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut config = ServerConfig::new(BeatboxEngine::new()?);
+    config.auth = AuthMode::required("secret")?;
+    let app = router(config);
+    let manifest = complete_adapter_manifest();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/browser/adapter/validate")
+                .header("content-type", "application/json")
+                .body(Body::from(manifest.to_string()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/browser/adapter/validate")
+                .header("content-type", "application/json")
+                .header("x-beatbox-api-key", "secret")
+                .body(Body::from(manifest.to_string()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let validation: BrowserAdapterManifestResponse = serde_json::from_slice(&body)?;
+    assert!(!validation.manifest_complete);
+    assert!(!validation.launchable);
+    assert!(!validation.trusted_for_sensitive_work);
+    assert!(!validation.endpoint_network_policy_bound);
+    assert_eq!(
+        validation.launch_endpoint.as_deref(),
+        Some("https://adapter.example/launch")
+    );
+    assert!(validation.missing_levels.is_empty());
+    assert!(validation.missing_controls.is_empty());
+    assert!(validation.missing_guard_fields.is_empty());
+    assert!(validation.missing_completion_proofs.is_empty());
+    assert!(
+        validation
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("endpoint binding"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn browser_adapter_manifest_reports_missing_contract_parts()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = router(ServerConfig::new(BeatboxEngine::new()?));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/browser/adapter/validate")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "adapter_id": "partial",
+                        "contract_version": "browser-adapter-v1",
+                        "launch_endpoint": null,
+                        "supported_levels": ["network_suppressed"],
+                        "supported_controls": ["fresh_profile", "egress_policy"],
+                        "guard_fields": ["guard_plan.network.allowed_origins"],
+                        "completion_proofs": []
+                    })
+                    .to_string(),
+                ))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let validation: BrowserAdapterManifestResponse = serde_json::from_slice(&body)?;
+    assert!(!validation.manifest_complete);
+    assert!(!validation.launchable);
+    assert!(validation.launch_endpoint.is_none());
+    assert!(
+        validation
+            .missing_levels
+            .contains(&BrowserSandboxLevel::OsIsolated)
+    );
+    assert!(
+        validation
+            .missing_controls
+            .contains(&BrowserSandboxControl::TeardownProof)
+    );
+    assert!(
+        validation
+            .missing_guard_fields
+            .iter()
+            .any(|field| field == "guard_plan.storage.teardown_proof_required")
+    );
+    assert!(
+        validation
+            .missing_completion_proofs
+            .iter()
+            .any(|proof| proof.contains("temporary profile directory"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn browser_adapter_manifest_rejects_unsafe_launch_endpoints()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = router(ServerConfig::new(BeatboxEngine::new()?));
+    for endpoint in [
+        "http://adapter.example/launch",
+        "https://127.0.0.1/launch",
+        "https://[::ffff:10.0.0.1]/launch",
+        "https://adapter.example/launch?token=secret",
+    ] {
+        let mut manifest = complete_adapter_manifest();
+        manifest["launch_endpoint"] = json!(endpoint);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/v1/browser/adapter/validate")
+                    .header("content-type", "application/json")
+                    .body(Body::from(manifest.to_string()))?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await?;
+        let error: ErrorResponse = serde_json::from_slice(&body)?;
+        assert_eq!(error.error.code, "invalid_browser_adapter_manifest");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn browser_adapter_manifest_does_not_complete_dns_unverified_endpoints()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = router(ServerConfig::new(BeatboxEngine::new()?));
+    let mut manifest = complete_adapter_manifest();
+    manifest["launch_endpoint"] = json!("https://127.0.0.1.nip.io/launch");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/browser/adapter/validate")
+                .header("content-type", "application/json")
+                .body(Body::from(manifest.to_string()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let validation: BrowserAdapterManifestResponse = serde_json::from_slice(&body)?;
+    assert!(!validation.manifest_complete);
+    assert!(!validation.launchable);
+    assert!(!validation.endpoint_network_policy_bound);
+    assert!(validation.missing_levels.is_empty());
+    assert!(validation.missing_controls.is_empty());
+    assert!(validation.missing_guard_fields.is_empty());
+    assert!(validation.missing_completion_proofs.is_empty());
+    assert!(
+        validation
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("DNS, proxy, redirect, and retry"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn capabilities_embed_the_browser_profile_contract() -> Result<(), Box<dyn std::error::Error>>
 {
     let app = router(ServerConfig::new(BeatboxEngine::new()?));
@@ -1207,7 +1432,8 @@ async fn openapi_lists_jobs_surface() -> Result<(), Box<dyn std::error::Error>> 
             .as_object()
             .is_some_and(|paths| paths.contains_key("/v1/jobs")
                 && paths.contains_key("/v1/browser/profiles")
-                && paths.contains_key("/v1/browser/admit"))
+                && paths.contains_key("/v1/browser/admit")
+                && paths.contains_key("/v1/browser/adapter/validate"))
     );
 
     // The spec now carries full component schemas so SDKs can be generated from it.
@@ -1227,6 +1453,9 @@ async fn openapi_lists_jobs_surface() -> Result<(), Box<dyn std::error::Error>> 
         "BrowserSandboxProfile",
         "BrowserIntegrationContract",
         "BrowserAdapterContract",
+        "BrowserAdapterManifestRequest",
+        "BrowserAdapterManifestResponse",
+        "BrowserAdapterValidationDecision",
         "BrowserSandboxLevel",
         "BrowserSandboxAvailability",
         "BrowserSandboxControl",
@@ -1256,6 +1485,24 @@ async fn openapi_lists_jobs_surface() -> Result<(), Box<dyn std::error::Error>> 
             .as_array()
             .is_some_and(|required| required.iter().any(|field| field == "browser_sandbox")),
         "capabilities schema should require browser_sandbox"
+    );
+    let manifest_properties = &schemas["BrowserAdapterManifestRequest"]["properties"];
+    assert_eq!(manifest_properties["adapter_id"]["minLength"], 1);
+    assert_eq!(manifest_properties["adapter_id"]["maxLength"], 128);
+    assert_eq!(manifest_properties["supported_levels"]["maxItems"], 64);
+    assert!(
+        manifest_properties["guard_fields"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("without surrounding whitespace")),
+        "guard_fields should describe runtime string-entry validation"
+    );
+    assert!(
+        schemas["BrowserAdapterManifestResponse"]["required"]
+            .as_array()
+            .is_some_and(|required| required
+                .iter()
+                .any(|field| field == "endpoint_network_policy_bound")),
+        "adapter manifest response should require endpoint_network_policy_bound"
     );
     // The execute path references the ExecutionResult schema, not just a status code.
     let execute_200 = &value["paths"]["/v1/execute"]["post"]["responses"]["200"];
@@ -1334,6 +1581,26 @@ async fn mcp_lists_tools() -> Result<(), Box<dyn std::error::Error>> {
     assert!(tools.to_string().contains("get_capabilities"));
     assert!(tools.to_string().contains("get_browser_profiles"));
     assert!(tools.to_string().contains("admit_browser_session"));
+    assert!(tools.to_string().contains("validate_browser_adapter"));
+    let validate_tool = tools
+        .as_array()
+        .and_then(|tools| {
+            tools
+                .iter()
+                .find(|tool| tool["name"] == "validate_browser_adapter")
+        })
+        .ok_or("validate_browser_adapter tool should be listed")?;
+    let schema = &validate_tool["inputSchema"]["properties"];
+    assert_eq!(schema["adapter_id"]["minLength"], 1);
+    assert_eq!(schema["adapter_id"]["maxLength"], 128);
+    assert_eq!(schema["supported_controls"]["maxItems"], 64);
+    assert_eq!(schema["guard_fields"]["items"]["minLength"], 1);
+    assert!(
+        schema["launch_endpoint"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("DNS, proxy, redirect, and retry")),
+        "launch_endpoint schema should not overstate endpoint validation"
+    );
     Ok(())
 }
 
@@ -1673,6 +1940,69 @@ async fn mcp_admit_browser_session_returns_structured_rejection()
             .is_some_and(|reasons| reasons.iter().any(|reason| reason
                 .as_str()
                 .is_some_and(|reason| reason.contains("no weaker browser profile"))))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_validate_browser_adapter_returns_structured_rejection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = router(ServerConfig::new(BeatboxEngine::new()?));
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "validate_browser_adapter",
+            "arguments": complete_adapter_manifest()
+        }
+    });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/mcp")
+                .header("content-type", "application/json")
+                .body(Body::from(request.to_string()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let value: serde_json::Value = serde_json::from_slice(&body)?;
+    let result = &value["result"];
+    assert_eq!(result["isError"], serde_json::json!(true));
+    assert_eq!(
+        result["content"][0]["text"],
+        "beatbox browser adapter validation"
+    );
+    assert_eq!(
+        result["structuredContent"]["decision"],
+        serde_json::json!("rejected")
+    );
+    assert_eq!(result["structuredContent"]["manifest_complete"], false);
+    assert_eq!(result["structuredContent"]["launchable"], false);
+    assert_eq!(
+        result["structuredContent"]["trusted_for_sensitive_work"],
+        false
+    );
+    assert_eq!(
+        result["structuredContent"]["endpoint_network_policy_bound"],
+        false
+    );
+    assert_eq!(
+        result["structuredContent"]["launch_endpoint"],
+        serde_json::json!("https://adapter.example/launch")
+    );
+    assert_eq!(
+        result["structuredContent"]["missing_guard_fields"],
+        serde_json::json!([])
+    );
+    assert!(
+        result["structuredContent"]["adapter_contract"]["required_guard_fields"]
+            .as_array()
+            .is_some_and(|fields| fields
+                .iter()
+                .any(|field| field == "guard_plan.network.deny_metadata_endpoints"))
     );
     Ok(())
 }

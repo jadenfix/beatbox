@@ -298,6 +298,55 @@ impl Default for BrowserAdapterHandoff {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
+pub struct BrowserAdapterManifestRequest {
+    /// Stable adapter identifier; non-empty, at most 128 bytes, no surrounding whitespace.
+    #[schema(min_length = 1, max_length = 128)]
+    pub adapter_id: String,
+    /// Browser adapter contract version; non-empty with no surrounding whitespace.
+    #[schema(min_length = 1)]
+    pub contract_version: String,
+    /// Optional HTTPS launch endpoint string. Only syntax and literal local/private hosts are checked.
+    #[schema(required = true, min_length = 1)]
+    pub launch_endpoint: Option<String>,
+    #[schema(max_items = 64)]
+    pub supported_levels: Vec<BrowserSandboxLevel>,
+    #[schema(max_items = 64)]
+    pub supported_controls: Vec<BrowserSandboxControl>,
+    /// Required guard_plan field names; entries must be non-empty without surrounding whitespace.
+    #[schema(max_items = 64)]
+    pub guard_fields: Vec<String>,
+    /// Required completion proof labels; entries must be non-empty without surrounding whitespace.
+    #[schema(max_items = 64)]
+    pub completion_proofs: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserAdapterValidationDecision {
+    Rejected,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct BrowserAdapterManifestResponse {
+    pub decision: BrowserAdapterValidationDecision,
+    pub manifest_complete: bool,
+    pub launchable: bool,
+    pub trusted_for_sensitive_work: bool,
+    pub adapter_id: String,
+    #[schema(required = true)]
+    pub launch_endpoint: Option<String>,
+    pub endpoint_network_policy_bound: bool,
+    pub missing_levels: Vec<BrowserSandboxLevel>,
+    pub missing_controls: Vec<BrowserSandboxControl>,
+    pub missing_guard_fields: Vec<String>,
+    pub missing_completion_proofs: Vec<String>,
+    pub reasons: Vec<String>,
+    pub required_next_steps: Vec<String>,
+    pub adapter_contract: BrowserAdapterContract,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BrowserAdmissionRequest {
     pub requested_level: BrowserSandboxLevel,
     pub actor: BrowserSessionActor,

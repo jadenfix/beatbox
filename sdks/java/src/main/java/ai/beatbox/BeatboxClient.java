@@ -83,6 +83,12 @@ public final class BeatboxClient {
         return sendForJson("POST", uri("/v1/browser/admit"), true, encode(request));
     }
 
+    /** {@code POST /v1/browser/adapter/validate}. Returns browser adapter manifest validation JSON. */
+    public JsonNode validateBrowserAdapter(JsonNode request) {
+        Objects.requireNonNull(request, "request");
+        return sendForJson("POST", uri("/v1/browser/adapter/validate"), true, encode(request));
+    }
+
     /** {@code POST /v1/execute}. Runs the request synchronously. */
     public ExecutionResult execute(ExecuteRequest request) {
         Objects.requireNonNull(request, "request");

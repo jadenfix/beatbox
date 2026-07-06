@@ -37,6 +37,11 @@ capability access, or out-of-policy network egress is a critical vulnerability.
   The `adapter_handoff` contract remains fail-closed: `launchable` is false and
   `launch_endpoint` is null until a production launcher, teardown path, and
   proof channel exist.
+  Adapter manifest validation is also fail-closed. It rejects unsafe launch
+  endpoint shapes, reports contract gaps, and marks endpoint network-policy
+  binding false because DNS/proxy/redirect/retry binding is not implemented; a
+  field-complete manifest is still untrusted metadata rather than permission to
+  launch browser automation.
 
 ## current grades
 
