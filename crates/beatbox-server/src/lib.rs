@@ -1185,7 +1185,7 @@ mod openapi_paths {
         request_body = BrowserAdmissionRequest,
         responses(
             (status = 200, description = "Browser sandbox admission decision", body = BrowserAdmissionResponse),
-            (status = 400, description = "Malformed JSON body", body = ErrorResponse),
+            (status = 400, description = "Malformed, oversized, or non-JSON request body", body = ErrorResponse),
             (status = 401, description = "Missing or invalid bearer token", body = ErrorResponse)
         )
     )]

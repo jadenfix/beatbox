@@ -65,6 +65,7 @@ pub struct BrowserIntegrationContract {
 pub struct BrowserProfilesResponse {
     pub version: String,
     pub runnable_browser_sessions: bool,
+    #[schema(required = true)]
     pub default_level: Option<BrowserSandboxLevel>,
     pub integration: BrowserIntegrationContract,
     pub profiles: Vec<BrowserSandboxProfile>,
@@ -109,6 +110,7 @@ pub struct BrowserAdmissionResponse {
     pub decision: BrowserAdmissionDecision,
     pub runnable_browser_sessions: bool,
     pub requested_level: BrowserSandboxLevel,
+    #[schema(required = true)]
     pub selected_level: Option<BrowserSandboxLevel>,
     pub actor: BrowserSessionActor,
     pub sensitivity: BrowserSensitivity,

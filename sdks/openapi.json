@@ -57,7 +57,7 @@
             }
           },
           "400": {
-            "description": "Malformed JSON body",
+            "description": "Malformed, oversized, or non-JSON request body",
             "content": {
               "application/json": {
                 "schema": {
@@ -399,6 +399,7 @@
           "decision",
           "runnable_browser_sessions",
           "requested_level",
+          "selected_level",
           "actor",
           "sensitivity",
           "downgrade_allowed",
@@ -493,6 +494,7 @@
         "required": [
           "version",
           "runnable_browser_sessions",
+          "default_level",
           "integration",
           "profiles"
         ],
