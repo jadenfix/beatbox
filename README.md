@@ -71,6 +71,13 @@ canonical fields and teardown proofs a future Tempo-side adapter must bind; its
 `launch_endpoint` is currently `null` and `launchable` is `false`. The current
 implementation always rejects admission and explains which production pieces or
 requested controls are still missing.
+`POST /v1/browser/adapter/validate` and MCP `validate_browser_adapter` let
+Tempo validate a proposed adapter manifest against the same contract. Validation
+reports missing levels, controls, guard fields, and completion proofs, but it
+only syntax-checks launch endpoints; DNS, proxy, redirect, retry, and request
+builder binding remain unimplemented, so it still returns `manifest_complete:
+false` and `launchable: false` until a trusted registration and launch path
+exists.
 
 ## Ecosystem
 

@@ -234,6 +234,67 @@ test("admitBrowserSession sends authenticated JSON preflight", async () => {
   }
 });
 
+test("validateBrowserAdapter sends authenticated JSON manifest", async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedUrl = "";
+  let capturedInit: RequestInit | undefined;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    capturedUrl = String(input);
+    capturedInit = init;
+    return new Response(
+      JSON.stringify({
+        decision: "rejected",
+        manifest_complete: true,
+        launchable: false,
+        trusted_for_sensitive_work: false,
+        adapter_id: "tempo-os-jail-v1",
+        launch_endpoint: "https://adapter.example/launch",
+        missing_levels: [],
+        missing_controls: [],
+        missing_guard_fields: [],
+        missing_completion_proofs: [],
+        reasons: ["no trusted adapter registration or launch path is implemented"],
+        required_next_steps: ["implement authenticated adapter registration"],
+        adapter_contract: {
+          version: "browser-adapter-v1",
+          status: "planned",
+          launch_endpoint: null,
+          handoff_fields: ["guard_plan"],
+          required_guard_fields: ["guard_plan.network.deny_metadata_endpoints"],
+          required_completion_proofs: ["temporary profile directory removed"],
+          unavailable_reason: "no browser adapter launch endpoint is implemented by this daemon",
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+  try {
+    const client = new BeatboxClient({
+      baseUrl: "http://127.0.0.1:7300/",
+      apiKey: "secret-key",
+    });
+    const request = {
+      adapter_id: "tempo-os-jail-v1",
+      contract_version: "browser-adapter-v1",
+      launch_endpoint: "https://adapter.example/launch",
+    };
+    const response = await client.validateBrowserAdapter(request) as Record<string, unknown>;
+
+    assert.equal(capturedUrl, "http://127.0.0.1:7300/v1/browser/adapter/validate");
+    assert.equal(capturedInit?.method, "POST");
+    assert.deepEqual(capturedInit?.headers, {
+      "x-beatbox-api-key": "secret-key",
+      "content-type": "application/json",
+    });
+    assert.deepEqual(JSON.parse(String(capturedInit?.body)), request);
+    assert.equal(response.decision, "rejected");
+    assert.equal(response.manifest_complete, true);
+    assert.equal(response.launchable, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 // --- ExecuteRequest round-trip --------------------------------------------
 
 test("ExecuteRequest.wasmWat serializes to the exact wire shape", () => {

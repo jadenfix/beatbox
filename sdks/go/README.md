@@ -86,6 +86,7 @@ All methods are context-first.
 | `Capabilities(ctx)` | `GET /v1/capabilities` | yes | `json.RawMessage` |
 | `BrowserProfiles(ctx)` | `GET /v1/browser/profiles` | yes | `json.RawMessage` |
 | `AdmitBrowserSession(ctx, req)` | `POST /v1/browser/admit` | yes | `json.RawMessage` |
+| `ValidateBrowserAdapter(ctx, req)` | `POST /v1/browser/adapter/validate` | yes | `json.RawMessage` |
 | `Execute(ctx, req)` | `POST /v1/execute` | yes | `*ExecutionResult` |
 | `CreateJob(ctx, req)` | `POST /v1/jobs` | yes | `*CreateJobResponse` |
 | `GetJob(ctx, id)` | `GET /v1/jobs/{id}` | yes | `*JobRecord` |

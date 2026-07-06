@@ -83,6 +83,16 @@ can be trusted. It is the authoritative admission decision and currently always
 rejects because Beatbox has no runnable browser launcher or isolation
 substrate.
 
+`POST /v1/browser/adapter/validate` and MCP `validate_browser_adapter` validate
+a proposed adapter manifest against the published Tempo handoff contract. The
+validator syntax-checks the claimed launch endpoint and checks supported
+sandbox levels, controls, guard-plan fields, and completion proofs, then reports
+missing pieces. It is intentionally not a registration endpoint: even a
+field-complete manifest still returns `decision: rejected`, `manifest_complete:
+false`, `endpoint_network_policy_bound: false`, `launchable: false`, and
+`trusted_for_sensitive_work: false` until Beatbox has production trust,
+endpoint binding, and launch paths.
+
 The current catalog is intentionally non-runnable: `runnable_browser_sessions`
 is false, `default_level` is serialized as `null`, and no profile is marked
 `available`. Profiles describe planned levels rather than enforced behavior:

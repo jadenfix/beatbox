@@ -30,6 +30,7 @@ the same methods:
 | `capabilities` | `GET /v1/capabilities` | yes |
 | `browser_profiles` / `browserProfiles` | `GET /v1/browser/profiles` | yes |
 | `browser_admit` / `admitBrowserSession` | `POST /v1/browser/admit` | yes |
+| `validate_browser_adapter` / `validateBrowserAdapter` | `POST /v1/browser/adapter/validate` | yes |
 | `execute` | `POST /v1/execute` | yes |
 | `create_job` | `POST /v1/jobs` | yes |
 | `get_job` | `GET /v1/jobs/{id}` | yes |
@@ -47,6 +48,18 @@ before returning the fail-closed admission decision. Admission responses also
 carry `guard_plan` and `adapter_handoff` blocks; SDKs that return raw JSON must
 preserve both so Tempo-style adapters can bind the future launch contract
 without guessing.
+
+Browser adapter manifests are also raw JSON today. Pass them through to
+`POST /v1/browser/adapter/validate`; beatbox validates the manifest shape and
+syntax-checks the launch endpoint, but does not resolve or bind that endpoint
+to DNS/proxy/redirect/retry policy. Responses still return `manifest_complete:
+false`, `endpoint_network_policy_bound: false`, and `launchable: false` until a
+trusted adapter registration and launch path exists.
+
+Language-specific method names are idiomatic: Rust and Python expose
+`browser_adapter_validate`, Ruby exposes `validate_browser_adapter`, TypeScript,
+Java, PHP, and C# expose `validateBrowserAdapter`, and Go exposes
+`ValidateBrowserAdapter`.
 
 ## How the fleet stays correct (the rollout pipeline)
 

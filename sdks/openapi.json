@@ -29,6 +29,56 @@
         }
       }
     },
+    "/v1/browser/adapter/validate": {
+      "post": {
+        "tags": [
+          "v1"
+        ],
+        "operationId": "browser_adapter_validate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowserAdapterManifestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Fail-closed browser adapter manifest validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserAdapterManifestResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid adapter manifest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/browser/admit": {
       "post": {
         "tags": [
@@ -443,6 +493,160 @@
             "type": "string"
           }
         }
+      },
+      "BrowserAdapterManifestRequest": {
+        "type": "object",
+        "required": [
+          "adapter_id",
+          "contract_version",
+          "launch_endpoint",
+          "supported_levels",
+          "supported_controls",
+          "guard_fields",
+          "completion_proofs"
+        ],
+        "properties": {
+          "adapter_id": {
+            "type": "string",
+            "description": "Stable adapter identifier; non-empty, at most 128 bytes, no surrounding whitespace.",
+            "maxLength": 128,
+            "minLength": 1
+          },
+          "completion_proofs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Required completion proof labels; entries must be non-empty without surrounding whitespace.",
+            "maxItems": 64
+          },
+          "contract_version": {
+            "type": "string",
+            "description": "Browser adapter contract version; non-empty with no surrounding whitespace.",
+            "minLength": 1
+          },
+          "guard_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Required guard_plan field names; entries must be non-empty without surrounding whitespace.",
+            "maxItems": 64
+          },
+          "launch_endpoint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional HTTPS launch endpoint string. Only syntax and literal local/private hosts are checked.",
+            "minLength": 1
+          },
+          "supported_controls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrowserSandboxControl"
+            },
+            "maxItems": 64
+          },
+          "supported_levels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrowserSandboxLevel"
+            },
+            "maxItems": 64
+          }
+        },
+        "additionalProperties": false
+      },
+      "BrowserAdapterManifestResponse": {
+        "type": "object",
+        "required": [
+          "decision",
+          "manifest_complete",
+          "launchable",
+          "trusted_for_sensitive_work",
+          "adapter_id",
+          "launch_endpoint",
+          "endpoint_network_policy_bound",
+          "missing_levels",
+          "missing_controls",
+          "missing_guard_fields",
+          "missing_completion_proofs",
+          "reasons",
+          "required_next_steps",
+          "adapter_contract"
+        ],
+        "properties": {
+          "adapter_contract": {
+            "$ref": "#/components/schemas/BrowserAdapterContract"
+          },
+          "adapter_id": {
+            "type": "string"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/BrowserAdapterValidationDecision"
+          },
+          "endpoint_network_policy_bound": {
+            "type": "boolean"
+          },
+          "launch_endpoint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "launchable": {
+            "type": "boolean"
+          },
+          "manifest_complete": {
+            "type": "boolean"
+          },
+          "missing_completion_proofs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "missing_controls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrowserSandboxControl"
+            }
+          },
+          "missing_guard_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "missing_levels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrowserSandboxLevel"
+            }
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "required_next_steps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "trusted_for_sensitive_work": {
+            "type": "boolean"
+          }
+        }
+      },
+      "BrowserAdapterValidationDecision": {
+        "type": "string",
+        "enum": [
+          "rejected"
+        ]
       },
       "BrowserAdmissionDecision": {
         "type": "string",

@@ -348,6 +348,60 @@ func TestAdmitBrowserSessionMockServer(t *testing.T) {
 	}
 }
 
+func TestValidateBrowserAdapterMockServer(t *testing.T) {
+	var gotMethod, gotPath, gotKey, gotCT string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotKey = r.Header.Get(apiKeyHeader)
+		gotCT = r.Header.Get("Content-Type")
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &gotBody)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, `{
+			"decision":"rejected",
+			"manifest_complete":true,
+			"launchable":false,
+			"trusted_for_sensitive_work":false,
+			"adapter_id":"tempo-os-jail-v1",
+			"launch_endpoint":"https://adapter.example/launch",
+			"missing_levels":[],
+			"missing_controls":[],
+			"missing_guard_fields":[],
+			"missing_completion_proofs":[],
+			"reasons":["no trusted adapter registration or launch path is implemented"],
+			"required_next_steps":["implement authenticated adapter registration"],
+			"adapter_contract":{"version":"browser-adapter-v1","status":"planned","launch_endpoint":null,"handoff_fields":["guard_plan"],"required_guard_fields":["guard_plan.network.deny_metadata_endpoints"],"required_completion_proofs":["temporary profile directory removed"],"unavailable_reason":"no browser adapter launch endpoint is implemented by this daemon"}
+		}`)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, WithAPIKey("secret-key"))
+	raw, err := c.ValidateBrowserAdapter(context.Background(), map[string]any{
+		"adapter_id":       "tempo-os-jail-v1",
+		"contract_version": "browser-adapter-v1",
+		"launch_endpoint":  "https://adapter.example/launch",
+	})
+	if err != nil {
+		t.Fatalf("ValidateBrowserAdapter: %v", err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/v1/browser/adapter/validate" {
+		t.Fatalf("request = %s %s", gotMethod, gotPath)
+	}
+	if gotKey != "secret-key" || gotCT != "application/json" {
+		t.Fatalf("headers key=%q content-type=%q", gotKey, gotCT)
+	}
+	if gotBody["adapter_id"] != "tempo-os-jail-v1" {
+		t.Fatalf("server received unexpected adapter body: %+v", gotBody)
+	}
+	if !strings.Contains(string(raw), `"manifest_complete":true`) || !strings.Contains(string(raw), `"launchable":false`) {
+		t.Fatalf("validation response not surfaced: %s", raw)
+	}
+}
+
 func TestExecuteAPIError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

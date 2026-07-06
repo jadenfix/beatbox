@@ -208,6 +208,55 @@ class TestClientRequest(unittest.TestCase):
             for proof in decision["adapter_handoff"]["required_completion_proofs"]
         ))
 
+    def test_browser_adapter_validate_sends_auth_json(self):
+        c = Client("http://host:7300/", api_key="secret-key")
+        captured = {}
+
+        def fake_open(req, timeout=None):
+            captured["req"] = req
+            body = {
+                "decision": "rejected",
+                "manifest_complete": True,
+                "launchable": False,
+                "trusted_for_sensitive_work": False,
+                "adapter_id": "tempo-os-jail-v1",
+                "launch_endpoint": "https://adapter.example/launch",
+                "missing_levels": [],
+                "missing_controls": [],
+                "missing_guard_fields": [],
+                "missing_completion_proofs": [],
+                "reasons": ["no trusted adapter registration or launch path is implemented"],
+                "required_next_steps": ["implement authenticated adapter registration"],
+                "adapter_contract": {
+                    "version": "browser-adapter-v1",
+                    "status": "planned",
+                    "launch_endpoint": None,
+                    "handoff_fields": ["guard_plan"],
+                    "required_guard_fields": ["guard_plan.network.deny_metadata_endpoints"],
+                    "required_completion_proofs": ["temporary profile directory removed"],
+                    "unavailable_reason": "no browser adapter launch endpoint is implemented by this daemon",
+                },
+            }
+            return _FakeResponse(200, json.dumps(body).encode())
+
+        request = {
+            "adapter_id": "tempo-os-jail-v1",
+            "contract_version": "browser-adapter-v1",
+            "launch_endpoint": "https://adapter.example/launch",
+        }
+        with _patched_open(c, fake_open):
+            validation = c.browser_adapter_validate(request)
+
+        req = captured["req"]
+        self.assertEqual(req.full_url, "http://host:7300/v1/browser/adapter/validate")
+        self.assertEqual(req.get_method(), "POST")
+        self.assertEqual(req.get_header("X-beatbox-api-key"), "secret-key")
+        self.assertEqual(req.get_header("Content-type"), "application/json")
+        self.assertEqual(json.loads(req.data.decode()), request)
+        self.assertEqual(validation["decision"], "rejected")
+        self.assertTrue(validation["manifest_complete"])
+        self.assertFalse(validation["launchable"])
+
     def test_cancel_job_204_returns_none(self):
         c = Client("http://host:7300")
 

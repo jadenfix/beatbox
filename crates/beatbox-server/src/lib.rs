@@ -14,7 +14,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use beatbox_core::{
-    BrowserAdapterContract, BrowserAdapterHandoff, BrowserAdmissionDecision,
+    BrowserAdapterContract, BrowserAdapterHandoff, BrowserAdapterManifestRequest,
+    BrowserAdapterManifestResponse, BrowserAdapterValidationDecision, BrowserAdmissionDecision,
     BrowserAdmissionGuardPlan, BrowserAdmissionRequest, BrowserAdmissionResponse,
     BrowserArtifactMode, BrowserCredentialGuardPlan, BrowserCredentialMode,
     BrowserIntegrationContract, BrowserNetworkGuardPlan, BrowserProfilesResponse,
@@ -193,6 +194,10 @@ pub fn router(config: ServerConfig) -> Router {
         .route("/v1/capabilities", get(capabilities))
         .route("/v1/browser/profiles", get(browser_profiles))
         .route("/v1/browser/admit", post(browser_admit))
+        .route(
+            "/v1/browser/adapter/validate",
+            post(browser_adapter_validate),
+        )
         .route("/v1/execute", post(execute))
         .route("/v1/jobs", post(create_job))
         .route("/v1/jobs/{id}", get(get_job).delete(cancel_job))
@@ -234,6 +239,18 @@ async fn browser_admit(
     validate_browser_admission_request(&request)
         .map_err(|message| ApiError::bad_request("invalid_browser_intent", message))?;
     Ok(Json(browser_admission_response(request)))
+}
+
+async fn browser_adapter_validate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    request: Request<Body>,
+) -> Result<Json<BrowserAdapterManifestResponse>, ApiError> {
+    state.authorize(&headers)?;
+    let request = parse_json_body(&state, request).await?;
+    validate_browser_adapter_manifest_request(&request)
+        .map_err(|message| ApiError::bad_request("invalid_browser_adapter_manifest", message))?;
+    Ok(Json(browser_adapter_manifest_response(request)))
 }
 
 async fn execute(
@@ -1030,6 +1047,139 @@ fn browser_adapter_handoff() -> BrowserAdapterHandoff {
     }
 }
 
+fn browser_adapter_manifest_response(
+    request: BrowserAdapterManifestRequest,
+) -> BrowserAdapterManifestResponse {
+    let adapter_contract = browser_adapter_contract();
+    let required_levels = browser_adapter_required_levels();
+    let required_controls = browser_adapter_required_controls(&required_levels);
+    let missing_levels = required_levels
+        .iter()
+        .filter(|level| !request.supported_levels.contains(level))
+        .cloned()
+        .collect::<Vec<_>>();
+    let missing_controls = required_controls
+        .iter()
+        .filter(|control| !request.supported_controls.contains(control))
+        .cloned()
+        .collect::<Vec<_>>();
+    let missing_guard_fields = adapter_contract
+        .required_guard_fields
+        .iter()
+        .filter(|field| !request.guard_fields.contains(field))
+        .cloned()
+        .collect::<Vec<_>>();
+    let missing_completion_proofs = adapter_contract
+        .required_completion_proofs
+        .iter()
+        .filter(|proof| !request.completion_proofs.contains(proof))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut reasons = vec![
+        "external browser adapter manifests are validation metadata only; beatbox does not trust or launch them yet"
+            .to_string(),
+    ];
+    if request.contract_version != adapter_contract.version {
+        reasons.push(format!(
+            "adapter contract_version `{}` does not match required `{}`",
+            request.contract_version, adapter_contract.version
+        ));
+    }
+    if request.launch_endpoint.is_none() {
+        reasons.push("adapter manifest does not provide a launch_endpoint".to_string());
+    } else {
+        reasons.push(
+            "adapter launch_endpoint passed syntax checks only; DNS, proxy, redirect, and retry network-policy binding is not implemented"
+                .to_string(),
+        );
+    }
+    if request
+        .supported_levels
+        .contains(&BrowserSandboxLevel::InstrumentedExternal)
+    {
+        reasons.push(
+            "instrumented_external is not accepted as a sandbox-capable adapter level".to_string(),
+        );
+    }
+    if !missing_levels.is_empty() {
+        reasons.push("adapter does not claim every required sandbox level".to_string());
+    }
+    if !missing_controls.is_empty() {
+        reasons.push("adapter does not claim every required sandbox control".to_string());
+    }
+    if !missing_guard_fields.is_empty() {
+        reasons.push("adapter does not bind every required guard_plan field".to_string());
+    }
+    if !missing_completion_proofs.is_empty() {
+        reasons.push("adapter does not report every required completion proof".to_string());
+    }
+    let endpoint_network_policy_bound = false;
+    let contract_fields_complete = request.contract_version == adapter_contract.version
+        && request.launch_endpoint.is_some()
+        && !request
+            .supported_levels
+            .contains(&BrowserSandboxLevel::InstrumentedExternal)
+        && missing_levels.is_empty()
+        && missing_controls.is_empty()
+        && missing_guard_fields.is_empty()
+        && missing_completion_proofs.is_empty();
+    let manifest_complete = contract_fields_complete && endpoint_network_policy_bound;
+    if contract_fields_complete {
+        reasons.push(
+            "adapter manifest satisfies the published field contract, but no trusted adapter registration, endpoint binding, or launch path is implemented"
+                .to_string(),
+        );
+    }
+
+    BrowserAdapterManifestResponse {
+        decision: BrowserAdapterValidationDecision::Rejected,
+        manifest_complete,
+        launchable: false,
+        trusted_for_sensitive_work: false,
+        adapter_id: request.adapter_id,
+        launch_endpoint: request.launch_endpoint,
+        endpoint_network_policy_bound,
+        missing_levels,
+        missing_controls,
+        missing_guard_fields,
+        missing_completion_proofs,
+        reasons,
+        required_next_steps: vec![
+            "implement authenticated adapter registration with same-user capability binding"
+                .to_string(),
+            "bind the launch endpoint to DNS, proxy, redirect, retry, and production request-builder network policy"
+                .to_string(),
+            "verify adapter completion proofs on the production browser teardown path".to_string(),
+            "run e2e sensitive-browser tests before marking any adapter launchable".to_string(),
+        ],
+        adapter_contract,
+    }
+}
+
+fn browser_adapter_required_levels() -> Vec<BrowserSandboxLevel> {
+    vec![
+        BrowserSandboxLevel::EphemeralProfile,
+        BrowserSandboxLevel::NetworkSuppressed,
+        BrowserSandboxLevel::SealedState,
+        BrowserSandboxLevel::OsIsolated,
+        BrowserSandboxLevel::RemoteIsolated,
+    ]
+}
+
+fn browser_adapter_required_controls(
+    required_levels: &[BrowserSandboxLevel],
+) -> Vec<BrowserSandboxControl> {
+    let mut controls = Vec::new();
+    for level in required_levels {
+        for control in browser_profile_controls(level) {
+            if !controls.contains(&control) {
+                controls.push(control);
+            }
+        }
+    }
+    controls
+}
+
 fn browser_admission_response(request: BrowserAdmissionRequest) -> BrowserAdmissionResponse {
     let requested_profile_controls = browser_profile_controls(&request.requested_level);
     let missing_controls: Vec<_> = request
@@ -1285,6 +1435,133 @@ fn validate_browser_admission_request(request: &BrowserAdmissionRequest) -> Resu
     Ok(())
 }
 
+fn validate_browser_adapter_manifest_request(
+    request: &BrowserAdapterManifestRequest,
+) -> Result<(), String> {
+    const MAX_ADAPTER_ID_LEN: usize = 128;
+    const MAX_LIST_ITEMS: usize = 64;
+    if request.adapter_id.is_empty() || request.adapter_id.trim() != request.adapter_id {
+        return Err(
+            "browser adapter manifest adapter_id must be non-empty without surrounding whitespace"
+                .to_string(),
+        );
+    }
+    if request.adapter_id.len() > MAX_ADAPTER_ID_LEN {
+        return Err(format!(
+            "browser adapter manifest adapter_id must be at most {MAX_ADAPTER_ID_LEN} bytes"
+        ));
+    }
+    if request.contract_version.is_empty()
+        || request.contract_version.trim() != request.contract_version
+    {
+        return Err(
+            "browser adapter manifest contract_version must be non-empty without surrounding whitespace"
+                .to_string(),
+        );
+    }
+    if let Some(endpoint) = &request.launch_endpoint {
+        validate_browser_adapter_launch_endpoint(endpoint)?;
+    }
+    if request.supported_levels.len() > MAX_LIST_ITEMS
+        || request.supported_controls.len() > MAX_LIST_ITEMS
+        || request.guard_fields.len() > MAX_LIST_ITEMS
+        || request.completion_proofs.len() > MAX_LIST_ITEMS
+    {
+        return Err(format!(
+            "browser adapter manifest arrays must contain at most {MAX_LIST_ITEMS} entries"
+        ));
+    }
+    validate_non_empty_string_list(&request.guard_fields, "guard_fields")?;
+    validate_non_empty_string_list(&request.completion_proofs, "completion_proofs")?;
+    Ok(())
+}
+
+fn validate_non_empty_string_list(values: &[String], field: &str) -> Result<(), String> {
+    for value in values {
+        if value.is_empty() || value.trim() != value {
+            return Err(format!(
+                "browser adapter manifest {field} entries must be non-empty without surrounding whitespace"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_browser_adapter_launch_endpoint(endpoint: &str) -> Result<(), String> {
+    if endpoint.is_empty() || endpoint.trim() != endpoint {
+        return Err(
+            "browser adapter manifest launch_endpoint must be non-empty without surrounding whitespace"
+                .to_string(),
+        );
+    }
+    let url = Url::parse(endpoint).map_err(|error| {
+        format!("browser adapter manifest launch_endpoint `{endpoint}` is invalid: {error}")
+    })?;
+    if url.scheme() != "https" {
+        return Err(format!(
+            "browser adapter manifest launch_endpoint `{endpoint}` must use https"
+        ));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(format!(
+            "browser adapter manifest launch_endpoint `{endpoint}` must not contain credentials"
+        ));
+    }
+    if url.host().is_none() {
+        return Err(format!(
+            "browser adapter manifest launch_endpoint `{endpoint}` must include a host"
+        ));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(format!(
+            "browser adapter manifest launch_endpoint `{endpoint}` must not contain query or fragment components"
+        ));
+    }
+    if let Some(host) = url.host() {
+        validate_browser_adapter_launch_host(endpoint, host)?;
+    }
+    Ok(())
+}
+
+fn validate_browser_adapter_launch_host(endpoint: &str, host: Host<&str>) -> Result<(), String> {
+    match host {
+        Host::Domain(domain) => {
+            let domain = domain.trim_end_matches('.').to_ascii_lowercase();
+            if domain == "localhost" || domain.ends_with(".localhost") {
+                return Err(format!(
+                    "browser adapter manifest launch_endpoint `{endpoint}` must not target localhost"
+                ));
+            }
+        }
+        Host::Ipv4(addr) => {
+            if ipv4_is_restricted_browser_target(addr) {
+                return Err(format!(
+                    "browser adapter manifest launch_endpoint `{endpoint}` must not target local or private IPv4 space"
+                ));
+            }
+        }
+        Host::Ipv6(addr) => {
+            if let Some(mapped) = addr.to_ipv4_mapped()
+                && ipv4_is_restricted_browser_target(mapped)
+            {
+                return Err(format!(
+                    "browser adapter manifest launch_endpoint `{endpoint}` must not target local or private IPv4-mapped IPv6 space"
+                ));
+            }
+            if addr.is_loopback()
+                || addr.is_unspecified()
+                || ipv6_is_unique_local(addr)
+                || ipv6_is_unicast_link_local(addr)
+            {
+                return Err(format!(
+                    "browser adapter manifest launch_endpoint `{endpoint}` must not target local or private IPv6 space"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_browser_target_origin(origin: &str) -> Result<(), String> {
     if origin.is_empty() || origin.trim() != origin {
         return Err("browser admission target_origins entries must be non-empty origins without surrounding whitespace".to_string());
@@ -1438,6 +1715,7 @@ pub fn openapi_spec_json() -> String {
         openapi_paths::capabilities,
         openapi_paths::browser_profiles,
         openapi_paths::browser_admit,
+        openapi_paths::browser_adapter_validate,
         openapi_paths::execute,
         openapi_paths::create_job,
         openapi_paths::get_job,
@@ -1470,6 +1748,9 @@ pub fn openapi_spec_json() -> String {
         beatbox_core::BrowserProfilesResponse,
         beatbox_core::BrowserIntegrationContract,
         beatbox_core::BrowserAdapterContract,
+        beatbox_core::BrowserAdapterManifestRequest,
+        beatbox_core::BrowserAdapterManifestResponse,
+        beatbox_core::BrowserAdapterValidationDecision,
         beatbox_core::BrowserSandboxProfile,
         beatbox_core::BrowserSandboxLevel,
         beatbox_core::BrowserSandboxAvailability,
@@ -1500,9 +1781,9 @@ struct ApiDoc;
 #[allow(dead_code)]
 mod openapi_paths {
     use beatbox_core::{
-        BrowserAdmissionRequest, BrowserAdmissionResponse, BrowserProfilesResponse,
-        CapabilitiesResponse, CreateJobResponse, ErrorResponse, ExecuteRequest, ExecutionResult,
-        JobRecord,
+        BrowserAdapterManifestRequest, BrowserAdapterManifestResponse, BrowserAdmissionRequest,
+        BrowserAdmissionResponse, BrowserProfilesResponse, CapabilitiesResponse, CreateJobResponse,
+        ErrorResponse, ExecuteRequest, ExecutionResult, JobRecord,
     };
 
     #[utoipa::path(
@@ -1547,6 +1828,19 @@ mod openapi_paths {
         )
     )]
     pub fn browser_admit() {}
+
+    #[utoipa::path(
+        post,
+        path = "/v1/browser/adapter/validate",
+        tag = "v1",
+        request_body = BrowserAdapterManifestRequest,
+        responses(
+            (status = 200, description = "Fail-closed browser adapter manifest validation", body = BrowserAdapterManifestResponse),
+            (status = 400, description = "Invalid adapter manifest", body = ErrorResponse),
+            (status = 401, description = "Missing or invalid bearer token", body = ErrorResponse)
+        )
+    )]
+    pub fn browser_adapter_validate() {}
 
     #[utoipa::path(
         post,
@@ -1868,6 +2162,91 @@ fn mcp_tools() -> Value {
                     "task_label": {"type": "string"}
                 }
             }
+        },
+        {
+            "name": "validate_browser_adapter",
+            "description": "Validate a proposed browser adapter manifest against beatbox's planned Tempo handoff contract without trusting or launching the adapter.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                    "adapter_id",
+                    "contract_version",
+                    "launch_endpoint",
+                    "supported_levels",
+                    "supported_controls",
+                    "guard_fields",
+                    "completion_proofs"
+                ],
+                "properties": {
+                    "adapter_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "description": "Stable adapter identifier with no surrounding whitespace."
+                    },
+                    "contract_version": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Browser adapter contract version with no surrounding whitespace."
+                    },
+                    "launch_endpoint": {
+                        "type": ["string", "null"],
+                        "minLength": 1,
+                        "description": "HTTPS endpoint string a future trusted request builder might call. Credentials, queries, fragments, localhost names, and literal local/private IP addresses are rejected; DNS, proxy, redirect, and retry binding is not implemented by this validator."
+                    },
+                    "supported_levels": {
+                        "type": "array",
+                        "maxItems": 64,
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "instrumented_external",
+                                "ephemeral_profile",
+                                "network_suppressed",
+                                "sealed_state",
+                                "os_isolated",
+                                "remote_isolated"
+                            ]
+                        }
+                    },
+                    "supported_controls": {
+                        "type": "array",
+                        "maxItems": 64,
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "fresh_profile",
+                                "no_ambient_credentials",
+                                "egress_policy",
+                                "local_network_block",
+                                "sealed_artifacts",
+                                "os_process_isolation",
+                                "remote_worker_isolation",
+                                "teardown_proof"
+                            ]
+                        }
+                    },
+                    "guard_fields": {
+                        "type": "array",
+                        "maxItems": 64,
+                        "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Required guard_plan field name with no surrounding whitespace."
+                        }
+                    },
+                    "completion_proofs": {
+                        "type": "array",
+                        "maxItems": 64,
+                        "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Required completion proof label with no surrounding whitespace."
+                        }
+                    }
+                }
+            }
         }
     ])
 }
@@ -1923,6 +2302,21 @@ async fn mcp_tools_call(
                 "content": [{"type": "text", "text": "beatbox browser admission decision"}],
                 "structuredContent": decision,
                 "isError": is_error,
+            }))
+        }
+        "validate_browser_adapter" => {
+            let request = mcp_browser_adapter_manifest_request(&arguments)?;
+            let validation = browser_adapter_manifest_response(request);
+            let validation = serde_json::to_value(validation).map_err(|error| {
+                (
+                    -32603,
+                    format!("failed to serialize browser adapter validation: {error}"),
+                )
+            })?;
+            Ok(json!({
+                "content": [{"type": "text", "text": "beatbox browser adapter validation"}],
+                "structuredContent": validation,
+                "isError": true,
             }))
         }
         "run_wasm" => {
@@ -2005,6 +2399,33 @@ fn mcp_browser_admission_request(
         task_label: mcp_optional_string_arg(arguments, "task_label", "admit_browser_session")?,
     };
     validate_browser_admission_request(&request).map_err(|message| (-32602, message))?;
+    Ok(request)
+}
+
+fn mcp_browser_adapter_manifest_request(
+    arguments: &Value,
+) -> Result<BrowserAdapterManifestRequest, (i64, String)> {
+    let arguments = mcp_tool_arguments(
+        arguments,
+        "validate_browser_adapter",
+        &[
+            "adapter_id",
+            "contract_version",
+            "launch_endpoint",
+            "supported_levels",
+            "supported_controls",
+            "guard_fields",
+            "completion_proofs",
+        ],
+    )?;
+    let request: BrowserAdapterManifestRequest =
+        serde_json::from_value(Value::Object(arguments.clone())).map_err(|error| {
+            (
+                -32602,
+                format!("validate_browser_adapter arguments are invalid: {error}"),
+            )
+        })?;
+    validate_browser_adapter_manifest_request(&request).map_err(|message| (-32602, message))?;
     Ok(request)
 }
 
