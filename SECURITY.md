@@ -41,6 +41,12 @@ capability access, or out-of-policy network egress is a critical vulnerability.
   MCP `get_browser_adapter_contract` is authenticated control-plane metadata
   only. It publishes the planned contract and conformance fixtures without
   registering an adapter, trusting an endpoint, or making browser launchable.
+  Adapter registration preflight through `/v1/browser/adapter/register` and
+  MCP `register_browser_adapter` is also fail-closed. It requires a same-user
+  capability candidate but does not issue, verify, persist, trust, launch, or
+  echo that candidate; responses keep `registered`, `launchable`,
+  `same_user_capability_bound`, and endpoint binding false until the production
+  control path enforces those invariants.
   Adapter manifest validation is also fail-closed. It rejects unsafe launch
   endpoint shapes, reports contract gaps, and marks endpoint network-policy
   binding false because DNS/proxy/redirect/retry binding is not implemented; a

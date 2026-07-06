@@ -90,6 +90,12 @@ class Client:
         """GET /v1/browser/adapter/contract. Returns raw contract JSON."""
         return self._request("GET", "/v1/browser/adapter/contract", auth=True)
 
+    def browser_adapter_register(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """POST /v1/browser/adapter/register. Returns raw registration JSON."""
+        return self._request(
+            "POST", "/v1/browser/adapter/register", auth=True, body=request
+        )
+
     def browser_adapter_validate(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """POST /v1/browser/adapter/validate. Returns raw validation JSON."""
         return self._request(

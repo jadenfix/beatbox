@@ -393,6 +393,68 @@ func TestBrowserAdapterContractMockServer(t *testing.T) {
 	}
 }
 
+func TestRegisterBrowserAdapterMockServer(t *testing.T) {
+	var gotMethod, gotPath, gotKey, gotCT string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotKey = r.Header.Get(apiKeyHeader)
+		gotCT = r.Header.Get("Content-Type")
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &gotBody)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, `{
+			"decision":"rejected",
+			"adapter_id":"tempo-os-jail-v1",
+			"actor":"agent",
+			"sensitivity":"sensitive",
+			"registered":false,
+			"launchable":false,
+			"trusted_for_sensitive_work":false,
+			"endpoint_network_policy_bound":false,
+			"same_user_capability_bound":false,
+			"manifest_validation":{"decision":"rejected","manifest_complete":false,"launchable":false,"trusted_for_sensitive_work":false,"adapter_id":"tempo-os-jail-v1","launch_endpoint":"https://adapter.example/launch","endpoint_network_policy_bound":false,"missing_levels":[],"missing_controls":[],"missing_guard_fields":[],"missing_completion_proofs":[],"reasons":["validation metadata only"],"required_next_steps":["implement registration"],"adapter_contract":{"version":"browser-adapter-v1","status":"planned","launch_endpoint":null,"handoff_fields":["guard_plan"],"required_guard_fields":["guard_plan.network.deny_metadata_endpoints"],"required_completion_proofs":["temporary profile directory removed"],"unavailable_reason":"no browser adapter launch endpoint is implemented by this daemon"},"conformance_profile":{"profile_version":"browser-adapter-conformance-v1","field_complete_manifest":{"adapter_id":"tempo-conformance-adapter-v1","contract_version":"browser-adapter-v1","launch_endpoint":"https://adapter.example/launch","supported_levels":["os_isolated"],"supported_controls":["os_process_isolation"],"guard_fields":["guard_plan.network.deny_metadata_endpoints"],"completion_proofs":["temporary profile directory removed"]},"field_complete_expectation":{"decision":"rejected","manifest_complete":false,"launchable":false,"trusted_for_sensitive_work":false,"endpoint_network_policy_bound":false,"missing_levels":[],"missing_controls":[],"missing_guard_fields":[],"missing_completion_proofs":[]},"required_cases":[],"notes":["not a launch grant"]}},
+			"reasons":["does not persist or trust adapters yet"],
+			"required_next_steps":["issue a same-user capability"]
+		}`)
+	}))
+	defer srv.Close()
+
+	req := map[string]any{
+		"actor":                "agent",
+		"sensitivity":          "sensitive",
+		"same_user_capability": "test-capability-fixture",
+		"manifest": map[string]any{
+			"adapter_id":       "tempo-os-jail-v1",
+			"contract_version": "browser-adapter-v1",
+			"launch_endpoint":  "https://adapter.example/launch",
+		},
+	}
+	c := New(srv.URL, WithAPIKey("secret-key"))
+	raw, err := c.RegisterBrowserAdapter(context.Background(), req)
+	if err != nil {
+		t.Fatalf("RegisterBrowserAdapter: %v", err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/v1/browser/adapter/register" {
+		t.Fatalf("request = %s %s", gotMethod, gotPath)
+	}
+	if gotKey != "secret-key" || gotCT != "application/json" {
+		t.Fatalf("headers key=%q content-type=%q", gotKey, gotCT)
+	}
+	if gotBody["same_user_capability"] != "test-capability-fixture" {
+		t.Fatalf("server received unexpected registration body: %+v", gotBody)
+	}
+	if manifest, ok := gotBody["manifest"].(map[string]any); !ok || manifest["adapter_id"] != "tempo-os-jail-v1" {
+		t.Fatalf("server received unexpected manifest: %+v", gotBody["manifest"])
+	}
+	if !strings.Contains(string(raw), `"registered":false`) || !strings.Contains(string(raw), `"same_user_capability_bound":false`) {
+		t.Fatalf("registration response not surfaced: %s", raw)
+	}
+}
+
 func TestValidateBrowserAdapterMockServer(t *testing.T) {
 	var gotMethod, gotPath, gotKey, gotCT string
 	var gotBody map[string]any

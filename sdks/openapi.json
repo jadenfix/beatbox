@@ -59,6 +59,56 @@
         }
       }
     },
+    "/v1/browser/adapter/register": {
+      "post": {
+        "tags": [
+          "v1"
+        ],
+        "operationId": "browser_adapter_register",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowserAdapterRegistrationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Fail-closed browser adapter registration preflight",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserAdapterRegistrationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid adapter registration request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/browser/adapter/validate": {
       "post": {
         "tags": [
@@ -867,6 +917,100 @@
             "items": {
               "type": "string"
             }
+          },
+          "trusted_for_sensitive_work": {
+            "type": "boolean"
+          }
+        }
+      },
+      "BrowserAdapterRegistrationDecision": {
+        "type": "string",
+        "enum": [
+          "rejected"
+        ]
+      },
+      "BrowserAdapterRegistrationRequest": {
+        "type": "object",
+        "required": [
+          "actor",
+          "sensitivity",
+          "same_user_capability",
+          "manifest"
+        ],
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/BrowserSessionActor"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/BrowserAdapterManifestRequest"
+          },
+          "same_user_capability": {
+            "type": "string",
+            "description": "Caller-supplied same-user capability candidate for the future local\nuser/session that would own this adapter. This daemon does not issue or\nverify it yet, accepts it for fail-closed preflight only, and never\nechoes it in responses.",
+            "maxLength": 256,
+            "minLength": 1
+          },
+          "sensitivity": {
+            "$ref": "#/components/schemas/BrowserSensitivity"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BrowserAdapterRegistrationResponse": {
+        "type": "object",
+        "required": [
+          "decision",
+          "adapter_id",
+          "actor",
+          "sensitivity",
+          "registered",
+          "launchable",
+          "trusted_for_sensitive_work",
+          "endpoint_network_policy_bound",
+          "same_user_capability_bound",
+          "manifest_validation",
+          "reasons",
+          "required_next_steps"
+        ],
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/BrowserSessionActor"
+          },
+          "adapter_id": {
+            "type": "string"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/BrowserAdapterRegistrationDecision"
+          },
+          "endpoint_network_policy_bound": {
+            "type": "boolean"
+          },
+          "launchable": {
+            "type": "boolean"
+          },
+          "manifest_validation": {
+            "$ref": "#/components/schemas/BrowserAdapterManifestResponse"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "registered": {
+            "type": "boolean"
+          },
+          "required_next_steps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "same_user_capability_bound": {
+            "type": "boolean"
+          },
+          "sensitivity": {
+            "$ref": "#/components/schemas/BrowserSensitivity"
           },
           "trusted_for_sensitive_work": {
             "type": "boolean"

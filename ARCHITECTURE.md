@@ -90,6 +90,16 @@ remains fail-closed: it is not a manifest submission or registration grant, and
 it reports `launchable: false`, `trusted_for_sensitive_work: false`, and
 `endpoint_network_policy_bound: false`.
 
+`POST /v1/browser/adapter/register` and MCP `register_browser_adapter` are the
+fail-closed registration preflight. They require a caller-supplied same-user
+capability candidate plus actor, sensitivity, and manifest fields, but Beatbox
+does not issue, verify, store, or echo that capability yet. The response keeps
+one authoritative manifest validation payload and reports `registered: false`,
+`same_user_capability_bound: false`, `endpoint_network_policy_bound: false`,
+and `launchable: false` until the production control plane can bind the local
+user capability, concrete endpoint network policy, storage, teardown proofs,
+and browser launch path.
+
 `POST /v1/browser/adapter/validate` and MCP `validate_browser_adapter` validate
 a proposed adapter manifest against the published Tempo handoff contract. The
 validator syntax-checks the claimed launch endpoint and checks supported

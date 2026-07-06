@@ -77,6 +77,14 @@ requiring a submitted manifest. This is authenticated compatibility metadata
 for Tempo and adapter authors; it is not registration, trust, or permission to
 launch, and the response keeps `launchable`, `trusted_for_sensitive_work`, and
 `endpoint_network_policy_bound` set to `false`.
+`POST /v1/browser/adapter/register` and MCP `register_browser_adapter` define
+the future Tempo adapter registration preflight. Callers submit actor,
+sensitivity, a same-user capability candidate, and the adapter manifest in one
+request. Beatbox validates the shape and manifest contract, never echoes the
+capability candidate, and still returns `registered: false`,
+`same_user_capability_bound: false`, `endpoint_network_policy_bound: false`,
+and `launchable: false` until same-user capability issuance, endpoint binding,
+storage/teardown verification, and browser launch paths are implemented.
 `POST /v1/browser/adapter/validate` and MCP `validate_browser_adapter` let
 Tempo validate a proposed adapter manifest against the same contract. Validation
 reports missing levels, controls, guard fields, and completion proofs, but it

@@ -327,6 +327,12 @@ pub enum BrowserAdapterValidationDecision {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserAdapterRegistrationDecision {
+    Rejected,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct BrowserAdapterConformanceExpectation {
     pub decision: BrowserAdapterValidationDecision,
     pub manifest_complete: bool,
@@ -373,6 +379,36 @@ pub struct BrowserAdapterContractResponse {
     pub trusted_for_sensitive_work: bool,
     pub endpoint_network_policy_bound: bool,
     pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserAdapterRegistrationRequest {
+    pub actor: BrowserSessionActor,
+    pub sensitivity: BrowserSensitivity,
+    /// Caller-supplied same-user capability candidate for the future local
+    /// user/session that would own this adapter. This daemon does not issue or
+    /// verify it yet, accepts it for fail-closed preflight only, and never
+    /// echoes it in responses.
+    #[schema(min_length = 1, max_length = 256)]
+    pub same_user_capability: String,
+    pub manifest: BrowserAdapterManifestRequest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct BrowserAdapterRegistrationResponse {
+    pub decision: BrowserAdapterRegistrationDecision,
+    pub adapter_id: String,
+    pub actor: BrowserSessionActor,
+    pub sensitivity: BrowserSensitivity,
+    pub registered: bool,
+    pub launchable: bool,
+    pub trusted_for_sensitive_work: bool,
+    pub endpoint_network_policy_bound: bool,
+    pub same_user_capability_bound: bool,
+    pub manifest_validation: BrowserAdapterManifestResponse,
+    pub reasons: Vec<String>,
+    pub required_next_steps: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]

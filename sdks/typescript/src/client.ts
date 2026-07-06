@@ -118,6 +118,16 @@ export class BeatboxClient {
     });
   }
 
+  /** `POST /v1/browser/adapter/register` — fail-closed browser adapter registration preflight. */
+  registerBrowserAdapter(request: unknown): Promise<unknown> {
+    return this.request<unknown>({
+      method: "POST",
+      path: "/v1/browser/adapter/register",
+      auth: true,
+      body: request,
+    });
+  }
+
   /** `POST /v1/browser/adapter/validate` — validate a proposed browser adapter manifest. */
   validateBrowserAdapter(request: unknown): Promise<unknown> {
     return this.request<unknown>({

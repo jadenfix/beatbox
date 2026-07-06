@@ -124,6 +124,14 @@ func (c *Client) BrowserAdapterContract(ctx context.Context) (json.RawMessage, e
 	return out, err
 }
 
+// RegisterBrowserAdapter submits a fail-closed browser adapter registration
+// preflight without trusting or launching it (POST /v1/browser/adapter/register).
+func (c *Client) RegisterBrowserAdapter(ctx context.Context, req any) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := c.do(ctx, http.MethodPost, c.baseURL+"/v1/browser/adapter/register", true, req, &out)
+	return out, err
+}
+
 // ValidateBrowserAdapter validates a proposed browser adapter manifest without
 // trusting or launching it (POST /v1/browser/adapter/validate).
 func (c *Client) ValidateBrowserAdapter(ctx context.Context, req any) (json.RawMessage, error) {
