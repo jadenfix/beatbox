@@ -859,11 +859,13 @@ async fn browser_profiles_are_authenticated_control_plane_metadata()
             .all(|profile| profile.availability != BrowserSandboxAvailability::Available),
         "no browser profile is runnable until a real browser substrate enforces it"
     );
-    let network_suppressed = profiles
+    let Some(network_suppressed) = profiles
         .profiles
         .iter()
         .find(|profile| profile.level == BrowserSandboxLevel::NetworkSuppressed)
-        .expect("network_suppressed profile should be published");
+    else {
+        panic!("network_suppressed profile should be published");
+    };
     assert!(
         network_suppressed
             .controls

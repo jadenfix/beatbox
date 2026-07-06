@@ -482,8 +482,7 @@
           "sensitivity": {
             "$ref": "#/components/schemas/BrowserSensitivity"
           }
-        },
-        "additionalProperties": false
+        }
       },
       "BrowserIntegrationContract": {
         "type": "object",
@@ -517,8 +516,7 @@
           "status": {
             "$ref": "#/components/schemas/BrowserSandboxAvailability"
           }
-        },
-        "additionalProperties": false
+        }
       },
       "BrowserProfilesResponse": {
         "type": "object",
@@ -555,8 +553,7 @@
           "version": {
             "type": "string"
           }
-        },
-        "additionalProperties": false
+        }
       },
       "BrowserSandboxAvailability": {
         "type": "string",
@@ -667,8 +664,7 @@
           "summary": {
             "type": "string"
           }
-        },
-        "additionalProperties": false
+        }
       },
       "BrowserSensitivity": {
         "type": "string",
