@@ -100,6 +100,7 @@ cross-origin or through proxy configuration inherited from the process.
 | --- | --- | --- |
 | `health()` | `GET /v1/health` | `array` (raw JSON) |
 | `capabilities()` | `GET /v1/capabilities` | `array` (raw JSON) |
+| `integration()` | `GET /v1/integration` | `array` (raw JSON) |
 | `browserProfiles()` | `GET /v1/browser/profiles` | `array` (raw JSON) |
 | `browserAdmit($request)` | `POST /v1/browser/admit` | `array` (raw JSON) |
 | `browserAdapterContract()` | `GET /v1/browser/adapter/contract` | `array` (raw JSON) |

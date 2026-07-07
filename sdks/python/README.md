@@ -74,6 +74,7 @@ client = Client("http://127.0.0.1:7300", api_key="bbx-api-key-placeholder", time
 | --- | --- | --- | --- |
 | `client.health()` | `GET /v1/health` | no | `dict` |
 | `client.capabilities()` | `GET /v1/capabilities` | yes | `dict` |
+| `client.integration()` | `GET /v1/integration` | yes | `dict` |
 | `client.browser_profiles()` | `GET /v1/browser/profiles` | yes | `dict` |
 | `client.browser_admit(request)` | `POST /v1/browser/admit` | yes | `dict` |
 | `client.browser_adapter_contract()` | `GET /v1/browser/adapter/contract` | yes | `dict` |

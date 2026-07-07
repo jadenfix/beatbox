@@ -170,6 +170,10 @@ class Client:
         """GET /v1/capabilities. Returns raw JSON."""
         return self._request("GET", "/v1/capabilities", auth=True)
 
+    def integration(self) -> Dict[str, Any]:
+        """GET /v1/integration. Returns raw ecosystem integration contract JSON."""
+        return self._request("GET", "/v1/integration", auth=True)
+
     def browser_profiles(self) -> Dict[str, Any]:
         """GET /v1/browser/profiles. Returns raw JSON."""
         return self._request("GET", "/v1/browser/profiles", auth=True)

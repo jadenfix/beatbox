@@ -60,6 +60,16 @@ final class Client
     }
 
     /**
+     * GET /v1/integration. Returns raw ecosystem integration contract JSON.
+     *
+     * @return array<string,mixed>
+     */
+    public function integration(): array
+    {
+        return $this->requestJson('GET', '/v1/integration', null, true);
+    }
+
+    /**
      * GET /v1/browser/profiles. Returns browser sandbox discovery metadata.
      *
      * @return array<string,mixed>
