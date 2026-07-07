@@ -40,6 +40,7 @@ A client is constructed with:
 | `browser_adapter_capability` / `issueBrowserAdapterCapability` / `IssueBrowserAdapterCapability` | `POST /v1/browser/adapter/capability` | yes | raw JSON |
 | `browser_adapter_register` / `registerBrowserAdapter` / `RegisterBrowserAdapter` | `POST /v1/browser/adapter/register` | yes | raw JSON |
 | `browser_adapter_launch_plan` / `planBrowserAdapterLaunch` / `PlanBrowserAdapterLaunch` | `POST /v1/browser/adapter/launch/plan` | yes | raw JSON |
+| `browser_adapter_launch_claim` / `claimBrowserAdapterLaunch` / `ClaimBrowserAdapterLaunch` | `POST /v1/browser/adapter/launch/claim` | yes | raw JSON |
 | `browser_adapter_validate` / `validate_browser_adapter` / `validateBrowserAdapter` / `ValidateBrowserAdapter` | `POST /v1/browser/adapter/validate` | yes | raw JSON |
 | `browser_adapter_completion_validate` / `validate_browser_adapter_completion` / `validateBrowserAdapterCompletion` / `ValidateBrowserAdapterCompletion` | `POST /v1/browser/adapter/completion/validate` | yes | raw JSON |
 | `execute(request)` | `POST /v1/execute` | yes | `ExecutionResult` |
@@ -86,7 +87,8 @@ Mirror these components from `openapi.json`: `CapabilitiesResponse`,
 `completion_proof_contract`, and `completion_report_template`; raw JSON return
 is acceptable until each language adds typed convenience models; preserve
 `issued_at`, `expires_at`, `max_session_seconds`, and
-`replay_protection_required` on every launch request envelope),
+`replay_protection_required` on every launch request envelope, plus
+`replay_protection_bound` on launch-plan responses),
 `BrowserAdapterManifestRequest`,
 `BrowserAdapterContractResponse`, `BrowserAdapterCapabilityIssueRequest`,
 `BrowserAdapterCapabilityIssueResponse`, `BrowserAdapterRegistrationRequest`,
@@ -94,7 +96,8 @@ is acceptable until each language adds typed convenience models; preserve
 `BrowserAdapterManifestResponse` (including `conformance_profile`),
 `BrowserAdapterConformanceProfile`, `BrowserAdapterLaunchRequest`,
 `BrowserAdapterLaunchPlanRequest`, `BrowserAdapterLaunchPlanResponse`,
-`BrowserAdapterLaunchPlanDecision`,
+`BrowserAdapterLaunchPlanDecision`, `BrowserAdapterLaunchClaimRequest`,
+`BrowserAdapterLaunchClaimResponse`, `BrowserAdapterLaunchClaimDecision`,
 `BrowserAdapterCompletionProofRequirement`, `BrowserAdapterCompletionReport`,
 `BrowserAdapterConformanceCase`, `BrowserAdapterConformanceExpectation`,
 `BrowserAdapterValidationDecision`,

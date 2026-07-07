@@ -169,6 +169,56 @@
         }
       }
     },
+    "/v1/browser/adapter/launch/claim": {
+      "post": {
+        "tags": [
+          "v1"
+        ],
+        "operationId": "browser_adapter_launch_claim",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowserAdapterLaunchClaimRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "REST-only browser adapter launch request replay claim",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserAdapterLaunchClaimResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid adapter launch claim request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/browser/adapter/launch/plan": {
       "post": {
         "tags": [
@@ -1273,6 +1323,94 @@
           }
         }
       },
+      "BrowserAdapterLaunchClaimDecision": {
+        "type": "string",
+        "enum": [
+          "claimed",
+          "rejected"
+        ]
+      },
+      "BrowserAdapterLaunchClaimRequest": {
+        "type": "object",
+        "required": [
+          "launch_request"
+        ],
+        "properties": {
+          "launch_request": {
+            "$ref": "#/components/schemas/BrowserAdapterLaunchRequest",
+            "description": "Full server-issued launch request returned by\n/v1/browser/adapter/launch/plan. Beatbox compares it against the stored\ncanonical envelope before marking the request id claimed."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BrowserAdapterLaunchClaimResponse": {
+        "type": "object",
+        "required": [
+          "decision",
+          "request_id",
+          "adapter_id",
+          "server_issued_launch_request",
+          "canonical_request_matched",
+          "launch_request_unexpired",
+          "launch_request_claim_bound",
+          "launch_request_replay_detected",
+          "launchable",
+          "trusted_for_sensitive_work",
+          "endpoint_network_policy_bound",
+          "reasons",
+          "required_next_steps"
+        ],
+        "properties": {
+          "adapter_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "canonical_request_matched": {
+            "type": "boolean"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/BrowserAdapterLaunchClaimDecision"
+          },
+          "endpoint_network_policy_bound": {
+            "type": "boolean"
+          },
+          "launch_request_claim_bound": {
+            "type": "boolean"
+          },
+          "launch_request_replay_detected": {
+            "type": "boolean"
+          },
+          "launch_request_unexpired": {
+            "type": "boolean"
+          },
+          "launchable": {
+            "type": "boolean"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "required_next_steps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "server_issued_launch_request": {
+            "type": "boolean"
+          },
+          "trusted_for_sensitive_work": {
+            "type": "boolean"
+          }
+        }
+      },
       "BrowserAdapterLaunchPlanDecision": {
         "type": "string",
         "enum": [
@@ -1314,6 +1452,7 @@
           "trusted_for_sensitive_work",
           "endpoint_network_policy_bound",
           "same_user_capability_bound",
+          "replay_protection_bound",
           "admission",
           "manifest_validation",
           "launch_request",
@@ -1354,6 +1493,10 @@
             "items": {
               "type": "string"
             }
+          },
+          "replay_protection_bound": {
+            "type": "boolean",
+            "description": "True when this daemon recorded the emitted launch request id in its\nbounded replay ledger. This is not launch authorization."
           },
           "request_id": {
             "type": "string"

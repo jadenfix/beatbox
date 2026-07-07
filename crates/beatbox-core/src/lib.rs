@@ -850,10 +850,47 @@ pub struct BrowserAdapterLaunchPlanResponse {
     pub trusted_for_sensitive_work: bool,
     pub endpoint_network_policy_bound: bool,
     pub same_user_capability_bound: bool,
+    /// True when this daemon recorded the emitted launch request id in its
+    /// bounded replay ledger. This is not launch authorization.
+    pub replay_protection_bound: bool,
     pub admission: BrowserAdmissionResponse,
     pub manifest_validation: BrowserAdapterManifestResponse,
     pub launch_request: BrowserAdapterLaunchRequest,
     pub completion_validation_endpoint: String,
+    pub reasons: Vec<String>,
+    pub required_next_steps: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserAdapterLaunchClaimRequest {
+    /// Full server-issued launch request returned by
+    /// /v1/browser/adapter/launch/plan. Beatbox compares it against the stored
+    /// canonical envelope before marking the request id claimed.
+    pub launch_request: BrowserAdapterLaunchRequest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserAdapterLaunchClaimDecision {
+    Claimed,
+    Rejected,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct BrowserAdapterLaunchClaimResponse {
+    pub decision: BrowserAdapterLaunchClaimDecision,
+    pub request_id: String,
+    #[schema(required = true)]
+    pub adapter_id: Option<String>,
+    pub server_issued_launch_request: bool,
+    pub canonical_request_matched: bool,
+    pub launch_request_unexpired: bool,
+    pub launch_request_claim_bound: bool,
+    pub launch_request_replay_detected: bool,
+    pub launchable: bool,
+    pub trusted_for_sensitive_work: bool,
+    pub endpoint_network_policy_bound: bool,
     pub reasons: Vec<String>,
     pub required_next_steps: Vec<String>,
 }

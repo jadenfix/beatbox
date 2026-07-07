@@ -38,9 +38,10 @@ capability access, or out-of-policy network egress is a critical vulnerability.
   `launch_endpoint` is null until a production launcher, teardown path, and
   proof channel exist. Its `launch_request_template` is a secret-free fixture
   for adapter authors and must not be interpreted as a launch grant. Its
-  lease/replay fields are a contract for future enforcement; they are not
-  evidence that Beatbox currently stores launch state or rejects adapter
-  replays on a production path. Its `completion_proof_contract` and
+  template lease/replay fields are a contract for future enforcement; live
+  launch-plan envelopes can additionally be stored in the bounded REST claim
+  ledger, but that still is not evidence of adapter trust or production browser
+  launch isolation. Its `completion_proof_contract` and
   `completion_report_template` are contract fixtures only; the booleans are not
   evidence until production teardown checks
   derive and verify them from the actual browser process, profile directory,
@@ -60,7 +61,11 @@ capability access, or out-of-policy network egress is a critical vulnerability.
   A matched capability may set `same_user_capability_bound`, but the response
   still rejects launch and keeps `launchable`, `trusted_for_sensitive_work`,
   and `endpoint_network_policy_bound` false until production endpoint binding,
-  launch, replay-state storage, and teardown verification exist.
+  launch, and teardown verification exist. Capability-bound launch plans are
+  recorded in a bounded in-memory replay ledger, and
+  `/v1/browser/adapter/launch/claim` can claim one unmodified, unexpired
+  server-issued envelope exactly once. Claim success is not endpoint trust or
+  permission to launch a browser.
   Same-user adapter capability issuance through
   `/v1/browser/adapter/capability` is REST-only and must never be exposed as an
   MCP/model-facing tool. The issuer requires configured daemon auth, stores

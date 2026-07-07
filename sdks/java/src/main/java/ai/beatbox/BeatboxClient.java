@@ -106,6 +106,12 @@ public final class BeatboxClient {
         return sendForJson("POST", uri("/v1/browser/adapter/launch/plan"), true, encode(request));
     }
 
+    /** {@code POST /v1/browser/adapter/launch/claim}. Returns launch claim JSON. */
+    public JsonNode claimBrowserAdapterLaunch(JsonNode request) {
+        Objects.requireNonNull(request, "request");
+        return sendForJson("POST", uri("/v1/browser/adapter/launch/claim"), true, encode(request));
+    }
+
     /** {@code POST /v1/browser/adapter/validate}. Returns browser adapter manifest validation JSON. */
     public JsonNode validateBrowserAdapter(JsonNode request) {
         Objects.requireNonNull(request, "request");

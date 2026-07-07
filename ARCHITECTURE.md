@@ -139,12 +139,18 @@ validates the nested admission and manifest through the production parsers,
 consumes a matching one-time capability, and emits a server-issued
 `BrowserAdapterLaunchRequest` plus completion report template that Tempo can
 carry into a future adapter launcher. Live launch-plan envelopes use current
-server `issued_at`/`expires_at` values and require request-id replay
-protection; discovery and conformance templates keep deterministic placeholder
-lease values. It is not exposed through MCP because the request includes bearer
-capability material. The response is still rejected and non-launchable;
-capability binding only proves that this local control-plane preflight saw a
-live token for the same actor, sensitivity, and adapter id.
+server `issued_at`/`expires_at` values, require request-id replay protection,
+and record capability-bound envelopes in a bounded in-memory replay ledger.
+`POST /v1/browser/adapter/launch/claim` is the REST-only Tempo-side claim
+preflight for that ledger: callers submit the full launch request, Beatbox
+compares it with the canonical stored envelope, and exactly one unexpired match
+can be claimed. Discovery and conformance templates keep deterministic
+placeholder lease values. Launch planning and claiming are not exposed through
+MCP because the flow includes bearer capability material and launch authority.
+The response is still rejected and non-launchable; capability binding and claim
+binding only prove that this local control-plane preflight saw a live token and
+an unmodified server-issued envelope for the same actor, sensitivity, and
+adapter id.
 
 `POST /v1/browser/adapter/completion/validate` and MCP
 `validate_browser_adapter_completion` validate a submitted completion report

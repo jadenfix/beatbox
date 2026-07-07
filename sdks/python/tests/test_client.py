@@ -608,6 +608,46 @@ class TestClientRequest(unittest.TestCase):
             "/v1/browser/adapter/completion/validate",
         )
 
+    def test_browser_adapter_launch_claim_sends_auth_json(self):
+        c = Client("http://host:7300/", api_key="secret-key")
+        captured = {}
+
+        def fake_open(req, timeout=None):
+            captured["req"] = req
+            body = {
+                "decision": "claimed",
+                "request_id": "bbx-browser-launch-plan-v1.fixture",
+                "adapter_id": "tempo-os-jail-v1",
+                "server_issued_launch_request": True,
+                "canonical_request_matched": True,
+                "launch_request_unexpired": True,
+                "launch_request_claim_bound": True,
+                "launch_request_replay_detected": False,
+                "launchable": False,
+                "trusted_for_sensitive_work": False,
+                "endpoint_network_policy_bound": False,
+            }
+            return _FakeResponse(200, json.dumps(body).encode())
+
+        request = {
+            "launch_request": {
+                "request_id": "bbx-browser-launch-plan-v1.fixture",
+                "adapter_id": "tempo-os-jail-v1",
+            }
+        }
+        with _patched_open(c, fake_open):
+            claim = c.browser_adapter_launch_claim(request)
+
+        req = captured["req"]
+        self.assertEqual(req.full_url, "http://host:7300/v1/browser/adapter/launch/claim")
+        self.assertEqual(req.get_method(), "POST")
+        self.assertEqual(req.get_header("X-beatbox-api-key"), "secret-key")
+        self.assertEqual(req.get_header("Content-type"), "application/json")
+        self.assertEqual(json.loads(req.data.decode()), request)
+        self.assertEqual(claim["decision"], "claimed")
+        self.assertTrue(claim["launch_request_claim_bound"])
+        self.assertFalse(claim["launchable"])
+
     def test_cancel_job_204_returns_none(self):
         c = Client("http://host:7300")
 

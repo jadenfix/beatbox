@@ -63,6 +63,7 @@ in an exception message.
 | `IssueBrowserAdapterCapabilityAsync(req)` | `POST /v1/browser/adapter/capability` | yes | `JsonElement` |
 | `RegisterBrowserAdapterAsync(req)` | `POST /v1/browser/adapter/register` | yes | `JsonElement` |
 | `PlanBrowserAdapterLaunchAsync(req)` | `POST /v1/browser/adapter/launch/plan` | yes | `JsonElement` |
+| `ClaimBrowserAdapterLaunchAsync(req)` | `POST /v1/browser/adapter/launch/claim` | yes | `JsonElement` |
 | `ValidateBrowserAdapterAsync(req)` | `POST /v1/browser/adapter/validate` | yes | `JsonElement` |
 | `ValidateBrowserAdapterCompletionAsync(req)` | `POST /v1/browser/adapter/completion/validate` | yes | `JsonElement` |
 | `ExecuteAsync(req)` | `POST /v1/execute` | yes | `ExecutionResult` |

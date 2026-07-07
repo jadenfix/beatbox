@@ -124,6 +124,17 @@ final class Client
     }
 
     /**
+     * POST /v1/browser/adapter/launch/claim. Returns launch claim JSON.
+     *
+     * @param array<string,mixed> $request
+     * @return array<string,mixed>
+     */
+    public function claimBrowserAdapterLaunch(array $request): array
+    {
+        return $this->requestJson('POST', '/v1/browser/adapter/launch/claim', $request, true);
+    }
+
+    /**
      * POST /v1/browser/adapter/validate. Returns browser adapter validation JSON.
      *
      * @param array<string,mixed> $request
