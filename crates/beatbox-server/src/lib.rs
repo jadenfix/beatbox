@@ -19,23 +19,25 @@ use beatbox_core::{
     BrowserAdapterCompletionReport, BrowserAdapterCompletionValidationDecision,
     BrowserAdapterCompletionValidationResponse, BrowserAdapterConformanceCase,
     BrowserAdapterConformanceExpectation, BrowserAdapterConformanceProfile, BrowserAdapterContract,
-    BrowserAdapterContractResponse, BrowserAdapterHandoff, BrowserAdapterLaunchPlanDecision,
-    BrowserAdapterLaunchPlanRequest, BrowserAdapterLaunchPlanResponse, BrowserAdapterLaunchRequest,
-    BrowserAdapterManifestRequest, BrowserAdapterManifestResponse,
-    BrowserAdapterRegistrationDecision, BrowserAdapterRegistrationRequest,
-    BrowserAdapterRegistrationResponse, BrowserAdapterValidationDecision, BrowserAdmissionDecision,
-    BrowserAdmissionGuardPlan, BrowserAdmissionRequest, BrowserAdmissionResponse,
-    BrowserArtifactMode, BrowserCredentialGuardPlan, BrowserCredentialMode,
-    BrowserIntegrationContract, BrowserNetworkGuardPlan, BrowserProfilesResponse,
-    BrowserSandboxAvailability, BrowserSandboxControl, BrowserSandboxLevel, BrowserSandboxProfile,
-    BrowserSensitivity, BrowserSessionActor, BrowserStorageGuardPlan, CapabilitiesResponse,
-    CapabilityLane, CapabilityLimits, CreateJobResponse, ErrorBody, ErrorResponse, ExecuteRequest,
-    ExecutionResult, ExecutionStatus, JobRecord, Lane, Policy, Source,
-    browser_adapter_launch_template_expires_at, browser_adapter_launch_template_issued_at,
+    BrowserAdapterContractResponse, BrowserAdapterHandoff, BrowserAdapterLaunchClaimDecision,
+    BrowserAdapterLaunchClaimRequest, BrowserAdapterLaunchClaimResponse,
+    BrowserAdapterLaunchPlanDecision, BrowserAdapterLaunchPlanRequest,
+    BrowserAdapterLaunchPlanResponse, BrowserAdapterLaunchRequest, BrowserAdapterManifestRequest,
+    BrowserAdapterManifestResponse, BrowserAdapterRegistrationDecision,
+    BrowserAdapterRegistrationRequest, BrowserAdapterRegistrationResponse,
+    BrowserAdapterValidationDecision, BrowserAdmissionDecision, BrowserAdmissionGuardPlan,
+    BrowserAdmissionRequest, BrowserAdmissionResponse, BrowserArtifactMode,
+    BrowserCredentialGuardPlan, BrowserCredentialMode, BrowserIntegrationContract,
+    BrowserNetworkGuardPlan, BrowserProfilesResponse, BrowserSandboxAvailability,
+    BrowserSandboxControl, BrowserSandboxLevel, BrowserSandboxProfile, BrowserSensitivity,
+    BrowserSessionActor, BrowserStorageGuardPlan, CapabilitiesResponse, CapabilityLane,
+    CapabilityLimits, CreateJobResponse, ErrorBody, ErrorResponse, ExecuteRequest, ExecutionResult,
+    ExecutionStatus, JobRecord, Lane, Policy, Source, browser_adapter_launch_template_expires_at,
+    browser_adapter_launch_template_issued_at,
 };
 use beatbox_engine::{BeatboxEngine, CancelFlag, EngineError};
 use bytes::Bytes;
-use chrono::{Duration as ChronoDuration, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 pub use jobs::JobStore;
 use jobs::{CancelOutcome, JobStoreError};
 use serde_json::{Value, json};
@@ -55,6 +57,7 @@ pub const DEFAULT_MAX_CONCURRENT_SYNC: usize = 8;
 pub const DEFAULT_MAX_CONCURRENT_JOBS: usize = 4;
 pub const BROWSER_ADAPTER_CAPABILITY_TTL_SECONDS: u64 = 5 * 60;
 pub const MAX_BROWSER_ADAPTER_CAPABILITIES: usize = 128;
+pub const MAX_BROWSER_ADAPTER_LAUNCH_REQUESTS: usize = 128;
 pub const AETHER_PAYMENT_HEADER: &str = "x-payment";
 pub const AETHER_PAYMENT_HASH_HEADER: &str = "x-aether-payment-hash";
 pub const MAX_AETHER_PAYMENT_HEADER_BYTES: usize = 8192;
@@ -199,6 +202,7 @@ struct AppState {
     // in spawn_job and removed when the worker finishes.
     job_cancels: Arc<Mutex<HashMap<String, CancelFlag>>>,
     browser_adapter_capabilities: Arc<Mutex<HashMap<[u8; 32], BrowserAdapterCapabilityRecord>>>,
+    browser_adapter_launch_requests: Arc<Mutex<HashMap<String, BrowserAdapterLaunchRequestRecord>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -208,6 +212,22 @@ struct BrowserAdapterCapabilityRecord {
     adapter_id: Option<String>,
     expires_at: Instant,
     used: bool,
+}
+
+#[derive(Clone, Debug)]
+struct BrowserAdapterLaunchRequestRecord {
+    launch_request: BrowserAdapterLaunchRequest,
+    expires_at: Instant,
+    claimed: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+struct BrowserAdapterLaunchClaimValidation {
+    server_issued_launch_request: bool,
+    canonical_request_matched: bool,
+    launch_request_unexpired: bool,
+    launch_request_claim_bound: bool,
+    launch_request_replay_detected: bool,
 }
 
 pub fn router(config: ServerConfig) -> Router {
@@ -220,6 +240,7 @@ pub fn router(config: ServerConfig) -> Router {
         job_permits,
         job_cancels: Arc::new(Mutex::new(HashMap::new())),
         browser_adapter_capabilities: Arc::new(Mutex::new(HashMap::new())),
+        browser_adapter_launch_requests: Arc::new(Mutex::new(HashMap::new())),
     };
     Router::new()
         .route("/v1/health", get(health))
@@ -242,6 +263,10 @@ pub fn router(config: ServerConfig) -> Router {
         .route(
             "/v1/browser/adapter/launch/plan",
             post(browser_adapter_launch_plan),
+        )
+        .route(
+            "/v1/browser/adapter/launch/claim",
+            post(browser_adapter_launch_claim),
         )
         .route(
             "/v1/browser/adapter/validate",
@@ -344,6 +369,19 @@ async fn browser_adapter_launch_plan(
     validate_browser_adapter_launch_plan_request(&request)
         .map_err(|message| ApiError::bad_request("invalid_browser_adapter_launch_plan", message))?;
     Ok(Json(browser_adapter_launch_plan_response(&state, request)))
+}
+
+async fn browser_adapter_launch_claim(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    request: Request<Body>,
+) -> Result<Json<BrowserAdapterLaunchClaimResponse>, ApiError> {
+    state.authorize(&headers)?;
+    let request = parse_json_body(&state, request).await?;
+    validate_browser_adapter_launch_claim_request(&request).map_err(|message| {
+        ApiError::bad_request("invalid_browser_adapter_launch_claim", message)
+    })?;
+    Ok(Json(browser_adapter_launch_claim_response(&state, request)))
 }
 
 async fn browser_adapter_contract_get(
@@ -1460,6 +1498,63 @@ fn browser_adapter_consume_capability_for(
     }
 }
 
+fn browser_adapter_record_launch_request(
+    state: &AppState,
+    launch_request: &BrowserAdapterLaunchRequest,
+) -> bool {
+    let now = Instant::now();
+    let mut launch_requests = match state.browser_adapter_launch_requests.lock() {
+        Ok(launch_requests) => launch_requests,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    launch_requests.retain(|_, record| record.expires_at > now);
+    if launch_requests.len() >= MAX_BROWSER_ADAPTER_LAUNCH_REQUESTS {
+        return false;
+    }
+    if launch_request.adapter_id.is_none() {
+        return false;
+    }
+    launch_requests.insert(
+        launch_request.request_id.clone(),
+        BrowserAdapterLaunchRequestRecord {
+            launch_request: launch_request.clone(),
+            expires_at: now + Duration::from_secs(launch_request.max_session_seconds),
+            claimed: false,
+        },
+    );
+    true
+}
+
+fn browser_adapter_claim_launch_request(
+    state: &AppState,
+    launch_request: &BrowserAdapterLaunchRequest,
+) -> BrowserAdapterLaunchClaimValidation {
+    let now = Instant::now();
+    let mut launch_requests = match state.browser_adapter_launch_requests.lock() {
+        Ok(launch_requests) => launch_requests,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    launch_requests.retain(|_, record| record.expires_at > now);
+    let Some(record) = launch_requests.get_mut(&launch_request.request_id) else {
+        return BrowserAdapterLaunchClaimValidation::default();
+    };
+    let launch_request_unexpired = record.expires_at > now;
+    let canonical_request_matched = record.launch_request == *launch_request;
+    let launch_request_replay_detected = record.claimed;
+    let launch_request_claim_bound =
+        launch_request_unexpired && canonical_request_matched && !record.claimed;
+    if launch_request_claim_bound {
+        record.claimed = true;
+    }
+    BrowserAdapterLaunchClaimValidation {
+        server_issued_launch_request: true,
+        canonical_request_matched,
+        launch_request_unexpired,
+        launch_request_claim_bound,
+        launch_request_replay_detected,
+    }
+}
+
 fn browser_adapter_manifest_response(
     request: BrowserAdapterManifestRequest,
 ) -> BrowserAdapterManifestResponse {
@@ -1752,6 +1847,8 @@ fn browser_adapter_launch_plan_response(
         &admission.guard_plan,
         browser_adapter_contract().required_completion_proofs,
     );
+    let replay_protection_bound =
+        same_user_capability_bound && browser_adapter_record_launch_request(state, &launch_request);
     let mut reasons = vec![
         "browser adapter launch planning is a fail-closed compatibility preflight; beatbox does not call adapter launch endpoints yet"
             .to_string(),
@@ -1763,6 +1860,17 @@ fn browser_adapter_launch_plan_response(
             "same-user capability matched this launch plan preflight, but it is not registration, endpoint trust, or launch permission"
                 .to_string(),
         );
+        if replay_protection_bound {
+            reasons.push(
+                "launch request id was recorded in this daemon's bounded replay ledger for the REST claim preflight"
+                    .to_string(),
+            );
+        } else {
+            reasons.push(
+                "launch request id could not be recorded in this daemon's replay ledger"
+                    .to_string(),
+            );
+        }
     } else {
         reasons.push(
             "same-user capability was not issued by this daemon, was already used, expired, or did not match the admission actor, sensitivity, and adapter_id"
@@ -1795,12 +1903,72 @@ fn browser_adapter_launch_plan_response(
         trusted_for_sensitive_work: false,
         endpoint_network_policy_bound: false,
         same_user_capability_bound,
+        replay_protection_bound,
         admission,
         manifest_validation,
         launch_request,
         completion_validation_endpoint: "/v1/browser/adapter/completion/validate".to_string(),
         reasons,
         required_next_steps,
+    }
+}
+
+fn browser_adapter_launch_claim_response(
+    state: &AppState,
+    request: BrowserAdapterLaunchClaimRequest,
+) -> BrowserAdapterLaunchClaimResponse {
+    let launch_request = request.launch_request;
+    let claim = browser_adapter_claim_launch_request(state, &launch_request);
+    let mut reasons = vec![
+        "browser adapter launch claim is a REST-only replay preflight; beatbox still does not call adapter launch endpoints"
+            .to_string(),
+    ];
+    if claim.launch_request_claim_bound {
+        reasons.push(
+            "launch request matched this daemon's canonical envelope and was claimed exactly once"
+                .to_string(),
+        );
+    } else if claim.launch_request_replay_detected {
+        reasons.push("launch request id was already claimed".to_string());
+    } else if !claim.server_issued_launch_request {
+        reasons.push(
+            "launch request id is not present in this daemon's bounded launch replay ledger"
+                .to_string(),
+        );
+    } else if !claim.launch_request_unexpired {
+        reasons.push("launch request lease has expired".to_string());
+    } else if !claim.canonical_request_matched {
+        reasons.push(
+            "launch request does not match the canonical envelope recorded during launch planning"
+                .to_string(),
+        );
+    }
+
+    BrowserAdapterLaunchClaimResponse {
+        decision: if claim.launch_request_claim_bound {
+            BrowserAdapterLaunchClaimDecision::Claimed
+        } else {
+            BrowserAdapterLaunchClaimDecision::Rejected
+        },
+        request_id: launch_request.request_id,
+        adapter_id: launch_request.adapter_id,
+        server_issued_launch_request: claim.server_issued_launch_request,
+        canonical_request_matched: claim.canonical_request_matched,
+        launch_request_unexpired: claim.launch_request_unexpired,
+        launch_request_claim_bound: claim.launch_request_claim_bound,
+        launch_request_replay_detected: claim.launch_request_replay_detected,
+        launchable: false,
+        trusted_for_sensitive_work: false,
+        endpoint_network_policy_bound: false,
+        reasons,
+        required_next_steps: vec![
+            "bind the adapter launch endpoint to the production request builder after DNS, proxy, redirects, and retries"
+                .to_string(),
+            "execute the claimed launch request only through a real isolated browser launcher"
+                .to_string(),
+            "verify process, profile, artifact, and egress teardown before trusting completion"
+                .to_string(),
+        ],
     }
 }
 
@@ -2381,6 +2549,57 @@ fn validate_browser_adapter_launch_plan_request(
     validate_browser_adapter_manifest_request(&request.manifest)
 }
 
+fn validate_browser_adapter_launch_claim_request(
+    request: &BrowserAdapterLaunchClaimRequest,
+) -> Result<(), String> {
+    const MAX_ID_LEN: usize = 128;
+    const MAX_LIST_ITEMS: usize = 64;
+    let launch_request = &request.launch_request;
+    validate_non_empty_trimmed(
+        &launch_request.request_id,
+        "browser adapter launch claim request_id",
+    )?;
+    if launch_request.request_id.len() > MAX_ID_LEN {
+        return Err(format!(
+            "browser adapter launch claim request_id must be at most {MAX_ID_LEN} bytes"
+        ));
+    }
+    let Some(adapter_id) = &launch_request.adapter_id else {
+        return Err("browser adapter launch claim adapter_id must be present".to_string());
+    };
+    validate_non_empty_trimmed(adapter_id, "browser adapter launch claim adapter_id")?;
+    if adapter_id.len() > MAX_ID_LEN {
+        return Err(format!(
+            "browser adapter launch claim adapter_id must be at most {MAX_ID_LEN} bytes"
+        ));
+    }
+    validate_non_empty_trimmed(
+        &launch_request.contract_version,
+        "browser adapter launch claim contract_version",
+    )?;
+    if launch_request.contract_version.len() > MAX_ID_LEN {
+        return Err(format!(
+            "browser adapter launch claim contract_version must be at most {MAX_ID_LEN} bytes"
+        ));
+    }
+    if launch_request.required_completion_proofs.len() > MAX_LIST_ITEMS
+        || launch_request.notes.len() > MAX_LIST_ITEMS
+    {
+        return Err(format!(
+            "browser adapter launch claim arrays must contain at most {MAX_LIST_ITEMS} entries"
+        ));
+    }
+    DateTime::parse_from_rfc3339(&launch_request.issued_at)
+        .map_err(|_| "browser adapter launch claim issued_at must be RFC3339".to_string())?;
+    DateTime::parse_from_rfc3339(&launch_request.expires_at)
+        .map_err(|_| "browser adapter launch claim expires_at must be RFC3339".to_string())?;
+    validate_non_empty_string_list_with_context(
+        &launch_request.required_completion_proofs,
+        "browser adapter launch claim required_completion_proofs",
+    )?;
+    Ok(())
+}
+
 fn validate_browser_adapter_completion_report_request(
     request: &BrowserAdapterCompletionReport,
 ) -> Result<(), String> {
@@ -2717,6 +2936,7 @@ pub fn openapi_spec_json() -> String {
         openapi_paths::browser_adapter_capability_issue,
         openapi_paths::browser_adapter_register,
         openapi_paths::browser_adapter_launch_plan,
+        openapi_paths::browser_adapter_launch_claim,
         openapi_paths::browser_adapter_validate,
         openapi_paths::browser_adapter_completion_validate,
         openapi_paths::execute,
@@ -2761,6 +2981,9 @@ pub fn openapi_spec_json() -> String {
         beatbox_core::BrowserAdapterConformanceCase,
         beatbox_core::BrowserAdapterConformanceExpectation,
         beatbox_core::BrowserAdapterConformanceProfile,
+        beatbox_core::BrowserAdapterLaunchClaimDecision,
+        beatbox_core::BrowserAdapterLaunchClaimRequest,
+        beatbox_core::BrowserAdapterLaunchClaimResponse,
         beatbox_core::BrowserAdapterLaunchRequest,
         beatbox_core::BrowserAdapterLaunchPlanDecision,
         beatbox_core::BrowserAdapterLaunchPlanRequest,
@@ -2803,7 +3026,8 @@ mod openapi_paths {
     use beatbox_core::{
         BrowserAdapterCapabilityIssueRequest, BrowserAdapterCapabilityIssueResponse,
         BrowserAdapterCompletionReport, BrowserAdapterCompletionValidationResponse,
-        BrowserAdapterContractResponse, BrowserAdapterLaunchPlanRequest,
+        BrowserAdapterContractResponse, BrowserAdapterLaunchClaimRequest,
+        BrowserAdapterLaunchClaimResponse, BrowserAdapterLaunchPlanRequest,
         BrowserAdapterLaunchPlanResponse, BrowserAdapterManifestRequest,
         BrowserAdapterManifestResponse, BrowserAdapterRegistrationRequest,
         BrowserAdapterRegistrationResponse, BrowserAdmissionRequest, BrowserAdmissionResponse,
@@ -2904,6 +3128,19 @@ mod openapi_paths {
         )
     )]
     pub fn browser_adapter_launch_plan() {}
+
+    #[utoipa::path(
+        post,
+        path = "/v1/browser/adapter/launch/claim",
+        tag = "v1",
+        request_body = BrowserAdapterLaunchClaimRequest,
+        responses(
+            (status = 200, description = "REST-only browser adapter launch request replay claim", body = BrowserAdapterLaunchClaimResponse),
+            (status = 400, description = "Invalid adapter launch claim request", body = ErrorResponse),
+            (status = 401, description = "Missing or invalid bearer token", body = ErrorResponse)
+        )
+    )]
+    pub fn browser_adapter_launch_claim() {}
 
     #[utoipa::path(
         post,

@@ -131,6 +131,18 @@ impl Client {
         decode_response(response).await
     }
 
+    pub async fn browser_adapter_launch_claim(
+        &self,
+        request: &BrowserAdapterLaunchClaimRequest,
+    ) -> Result<BrowserAdapterLaunchClaimResponse, ClientError> {
+        let request_builder = self
+            .http
+            .post(format!("{}/v1/browser/adapter/launch/claim", self.base_url))
+            .json(request);
+        let response = self.authorize(request_builder).send().await?;
+        decode_response(response).await
+    }
+
     pub async fn browser_adapter_validate(
         &self,
         request: &BrowserAdapterManifestRequest,

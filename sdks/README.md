@@ -34,6 +34,7 @@ the same methods:
 | `browser_adapter_capability` / `issueBrowserAdapterCapability` | `POST /v1/browser/adapter/capability` | yes |
 | `browser_adapter_register` / `registerBrowserAdapter` | `POST /v1/browser/adapter/register` | yes |
 | `browser_adapter_launch_plan` / `planBrowserAdapterLaunch` | `POST /v1/browser/adapter/launch/plan` | yes |
+| `browser_adapter_launch_claim` / `claimBrowserAdapterLaunch` | `POST /v1/browser/adapter/launch/claim` | yes |
 | `validate_browser_adapter` / `validateBrowserAdapter` | `POST /v1/browser/adapter/validate` | yes |
 | `browser_adapter_completion_validate` / `validateBrowserAdapterCompletion` | `POST /v1/browser/adapter/completion/validate` | yes |
 | `execute` | `POST /v1/execute` | yes |
@@ -86,10 +87,14 @@ Launch planning requests are also raw JSON and REST-only:
 `POST /v1/browser/adapter/launch/plan` combines a same-user capability,
 admission intent, and manifest into a server-issued launch envelope and
 completion report template. The envelope includes current server lease
-timestamps and a replay-protection requirement, but SDKs must never expose this
-as MCP/model-visible tooling, and callers must still treat the response as
-non-launchable and untrusted until production endpoint binding, launch,
-replay-state storage, and teardown checks exist.
+timestamps and a replay-protection requirement. A capability-bound response also
+sets `replay_protection_bound` when this daemon recorded the envelope in its
+bounded replay ledger. `POST /v1/browser/adapter/launch/claim` accepts the full
+`launch_request` and can bind exactly one unmodified, unexpired claim before a
+future Tempo adapter invocation. SDKs must never expose launch planning or
+claiming as MCP/model-visible tooling, and callers must still treat both
+responses as non-launchable and untrusted until production endpoint binding,
+launch, and teardown checks exist.
 Completion reports are raw JSON too. Pass them through to
 `POST /v1/browser/adapter/completion/validate`; beatbox checks the submitted
 shape, proof ids, and teardown evidence booleans against the same proof
@@ -100,15 +105,19 @@ store, or egress log.
 Language-specific method names are idiomatic: Rust and Python expose
 `browser_adapter_contract`, `browser_adapter_capability`,
 `browser_adapter_register`, `browser_adapter_launch_plan`,
-`browser_adapter_validate`, and `browser_adapter_completion_validate`; Ruby exposes
+`browser_adapter_launch_claim`, `browser_adapter_validate`, and
+`browser_adapter_completion_validate`; Ruby exposes
 `browser_adapter_contract`, `browser_adapter_capability`,
 `browser_adapter_register`, `browser_adapter_launch_plan`,
-`validate_browser_adapter`, and `validate_browser_adapter_completion`; TypeScript, Java, PHP, and C# expose
+`browser_adapter_launch_claim`, `validate_browser_adapter`, and
+`validate_browser_adapter_completion`; TypeScript, Java, PHP, and C# expose
 `browserAdapterContract`, `issueBrowserAdapterCapability`,
-`registerBrowserAdapter`, `planBrowserAdapterLaunch`, `validateBrowserAdapter`, and
+`registerBrowserAdapter`, `planBrowserAdapterLaunch`,
+`claimBrowserAdapterLaunch`, `validateBrowserAdapter`, and
 `validateBrowserAdapterCompletion`; and Go exposes
 `BrowserAdapterContract`, `IssueBrowserAdapterCapability`,
-`RegisterBrowserAdapter`, `PlanBrowserAdapterLaunch`, `ValidateBrowserAdapter`, and
+`RegisterBrowserAdapter`, `PlanBrowserAdapterLaunch`,
+`ClaimBrowserAdapterLaunch`, `ValidateBrowserAdapter`, and
 `ValidateBrowserAdapterCompletion`.
 
 ## How the fleet stays correct (the rollout pipeline)

@@ -5,6 +5,7 @@ use beatbox_core::{
     BROWSER_ADAPTER_LAUNCH_LEASE_SECONDS, BrowserAdapterCapabilityIssueResponse,
     BrowserAdapterCompletionValidationDecision, BrowserAdapterCompletionValidationResponse,
     BrowserAdapterConformanceExpectation, BrowserAdapterContractResponse,
+    BrowserAdapterLaunchClaimDecision, BrowserAdapterLaunchClaimResponse,
     BrowserAdapterLaunchPlanResponse, BrowserAdapterManifestResponse,
     BrowserAdapterRegistrationResponse, BrowserAdmissionDecision, BrowserAdmissionRequest,
     BrowserArtifactMode, BrowserCredentialMode, BrowserProfilesResponse,
@@ -1985,6 +1986,7 @@ async fn browser_adapter_launch_plan_binds_capability_without_launching()
     assert!(!plan.launchable);
     assert!(!plan.trusted_for_sensitive_work);
     assert!(!plan.endpoint_network_policy_bound);
+    assert!(plan.replay_protection_bound);
     assert_eq!(plan.adapter_id, "tempo-os-jail-v1");
     assert_eq!(plan.actor, BrowserSessionActor::Agent);
     assert_eq!(plan.sensitivity, BrowserSensitivity::Sensitive);
@@ -2032,6 +2034,109 @@ async fn browser_adapter_launch_plan_binds_capability_without_launching()
             .iter()
             .any(|reason| reason.contains("not registration"))
     );
+    assert!(plan.reasons.iter().any(|reason| {
+        reason.contains("bounded replay ledger") && reason.contains("REST claim preflight")
+    }));
+
+    let claim_request = json!({ "launch_request": plan.launch_request });
+    let mut mutated_claim = claim_request.clone();
+    mutated_claim["launch_request"]["target_origins"] = json!(["https://evil.example"]);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/browser/adapter/launch/claim")
+                .header("content-type", "application/json")
+                .header("x-beatbox-api-key", "secret")
+                .body(Body::from(mutated_claim.to_string()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let mutated_claim: BrowserAdapterLaunchClaimResponse = serde_json::from_slice(&body)?;
+    assert_eq!(
+        mutated_claim.decision,
+        BrowserAdapterLaunchClaimDecision::Rejected
+    );
+    assert!(mutated_claim.server_issued_launch_request);
+    assert!(!mutated_claim.canonical_request_matched);
+    assert!(!mutated_claim.launch_request_claim_bound);
+    assert!(!mutated_claim.launch_request_replay_detected);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/browser/adapter/launch/claim")
+                .header("content-type", "application/json")
+                .header("x-beatbox-api-key", "secret")
+                .body(Body::from(claim_request.to_string()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let claim: BrowserAdapterLaunchClaimResponse = serde_json::from_slice(&body)?;
+    assert_eq!(claim.decision, BrowserAdapterLaunchClaimDecision::Claimed);
+    assert!(claim.server_issued_launch_request);
+    assert!(claim.canonical_request_matched);
+    assert!(claim.launch_request_unexpired);
+    assert!(claim.launch_request_claim_bound);
+    assert!(!claim.launch_request_replay_detected);
+    assert!(!claim.launchable);
+    assert!(!claim.trusted_for_sensitive_work);
+    assert!(!claim.endpoint_network_policy_bound);
+    assert!(claim.reasons.iter().any(|reason| {
+        reason.contains("canonical envelope") && reason.contains("claimed exactly once")
+    }));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/browser/adapter/launch/claim")
+                .header("content-type", "application/json")
+                .header("x-beatbox-api-key", "secret")
+                .body(Body::from(claim_request.to_string()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let replayed_claim: BrowserAdapterLaunchClaimResponse = serde_json::from_slice(&body)?;
+    assert_eq!(
+        replayed_claim.decision,
+        BrowserAdapterLaunchClaimDecision::Rejected
+    );
+    assert!(replayed_claim.server_issued_launch_request);
+    assert!(replayed_claim.canonical_request_matched);
+    assert!(replayed_claim.launch_request_unexpired);
+    assert!(!replayed_claim.launch_request_claim_bound);
+    assert!(replayed_claim.launch_request_replay_detected);
+
+    let mut unknown_claim = claim_request.clone();
+    unknown_claim["launch_request"]["request_id"] = json!("bbx-browser-launch-plan-v1.unknown");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/browser/adapter/launch/claim")
+                .header("content-type", "application/json")
+                .header("x-beatbox-api-key", "secret")
+                .body(Body::from(unknown_claim.to_string()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let unknown_claim: BrowserAdapterLaunchClaimResponse = serde_json::from_slice(&body)?;
+    assert_eq!(
+        unknown_claim.decision,
+        BrowserAdapterLaunchClaimDecision::Rejected
+    );
+    assert!(!unknown_claim.server_issued_launch_request);
+    assert!(!unknown_claim.launch_request_claim_bound);
 
     let replay = complete_adapter_launch_plan(&issued.same_user_capability);
     let response = app
@@ -2049,6 +2154,7 @@ async fn browser_adapter_launch_plan_binds_capability_without_launching()
     let body = to_bytes(response.into_body(), usize::MAX).await?;
     let replay: BrowserAdapterLaunchPlanResponse = serde_json::from_slice(&body)?;
     assert!(!replay.same_user_capability_bound);
+    assert!(!replay.replay_protection_bound);
     assert!(!replay.launchable);
 
     let mut unknown = complete_adapter_launch_plan("not-issued");
@@ -2791,6 +2897,7 @@ async fn openapi_lists_jobs_surface() -> Result<(), Box<dyn std::error::Error>> 
                 && paths.contains_key("/v1/browser/adapter/capability")
                 && paths.contains_key("/v1/browser/adapter/register")
                 && paths.contains_key("/v1/browser/adapter/launch/plan")
+                && paths.contains_key("/v1/browser/adapter/launch/claim")
                 && paths.contains_key("/v1/browser/adapter/validate")
                 && paths.contains_key("/v1/browser/adapter/completion/validate"))
     );
@@ -2822,6 +2929,9 @@ async fn openapi_lists_jobs_surface() -> Result<(), Box<dyn std::error::Error>> 
         "BrowserAdapterConformanceCase",
         "BrowserAdapterConformanceExpectation",
         "BrowserAdapterConformanceProfile",
+        "BrowserAdapterLaunchClaimDecision",
+        "BrowserAdapterLaunchClaimRequest",
+        "BrowserAdapterLaunchClaimResponse",
         "BrowserAdapterLaunchRequest",
         "BrowserAdapterLaunchPlanDecision",
         "BrowserAdapterLaunchPlanRequest",
@@ -2931,11 +3041,29 @@ async fn openapi_lists_jobs_surface() -> Result<(), Box<dyn std::error::Error>> 
                         .any(|field| field == "same_user_capability_bound")
                     && required
                         .iter()
+                        .any(|field| field == "replay_protection_bound")
+                    && required
+                        .iter()
                         .any(|field| field == "completion_validation_endpoint")
                     && required.iter().any(|field| field == "admission")
                     && required.iter().any(|field| field == "manifest_validation")
             ),
         "adapter launch plan response should require the fail-closed launch envelope"
+    );
+    assert!(
+        schemas["BrowserAdapterLaunchClaimResponse"]["required"]
+            .as_array()
+            .is_some_and(|required| required
+                .iter()
+                .any(|field| field == "launch_request_claim_bound")
+                && required
+                    .iter()
+                    .any(|field| field == "launch_request_replay_detected")
+                && required
+                    .iter()
+                    .any(|field| field == "canonical_request_matched")
+                && required.iter().any(|field| field == "launchable")),
+        "adapter launch claim response should expose replay claim state"
     );
     assert!(
         schemas["BrowserAdapterManifestResponse"]["required"]
@@ -3155,6 +3283,8 @@ async fn mcp_lists_tools() -> Result<(), Box<dyn std::error::Error>> {
     );
     assert!(!tools.to_string().contains("browser_adapter_launch_plan"));
     assert!(!tools.to_string().contains("plan_browser_adapter_launch"));
+    assert!(!tools.to_string().contains("browser_adapter_launch_claim"));
+    assert!(!tools.to_string().contains("claim_browser_adapter_launch"));
     assert!(!tools.to_string().contains("browser_adapter_capability"));
     let contract_tool = tools
         .as_array()

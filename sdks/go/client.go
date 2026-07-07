@@ -148,6 +148,14 @@ func (c *Client) PlanBrowserAdapterLaunch(ctx context.Context, req any) (json.Ra
 	return out, err
 }
 
+// ClaimBrowserAdapterLaunch claims a server-issued browser adapter launch
+// request once without trusting or launching it (POST /v1/browser/adapter/launch/claim).
+func (c *Client) ClaimBrowserAdapterLaunch(ctx context.Context, req any) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := c.do(ctx, http.MethodPost, c.baseURL+"/v1/browser/adapter/launch/claim", true, req, &out)
+	return out, err
+}
+
 // ValidateBrowserAdapter validates a proposed browser adapter manifest without
 // trusting or launching it (POST /v1/browser/adapter/validate).
 func (c *Client) ValidateBrowserAdapter(ctx context.Context, req any) (json.RawMessage, error) {

@@ -107,13 +107,19 @@ browser admission intent, and adapter manifest together; Beatbox consumes a
 matching live capability at most once and returns a server-issued
 `launch_request` envelope plus completion report template without echoing the
 capability. The live envelope includes `issued_at`, `expires_at`,
-`max_session_seconds`, and `replay_protection_required` so future Tempo
-launchers can reject stale or replayed request ids. The response remains
-`rejected`, `launchable: false`,
+`max_session_seconds`, `replay_protection_required`, and
+`replay_protection_bound` so Tempo can tell whether this daemon recorded the
+request id in its bounded replay ledger. `POST
+/v1/browser/adapter/launch/claim` is the follow-up REST-only preflight Tempo
+calls with the full `launch_request` immediately before any adapter invocation;
+Beatbox compares it with the canonical stored envelope, rejects mutations,
+rejects unknown or already-claimed ids, and marks exactly one matching claim.
+Claim success is only replay-state binding, not launch trust. The launch-plan
+response remains `rejected`, `launchable: false`,
 `trusted_for_sensitive_work: false`, and `endpoint_network_policy_bound: false`
 because no production launcher or endpoint request-builder binding exists yet.
-There is intentionally no MCP tool for this route because the request carries
-bearer capability material.
+There is intentionally no MCP tool for launch planning or claiming because the
+flow carries bearer capability material and launch authority.
 `POST /v1/browser/adapter/validate` and MCP `validate_browser_adapter` let
 Tempo validate a proposed adapter manifest against the same contract. Validation
 reports missing levels, controls, guard fields, and completion proofs, but it
