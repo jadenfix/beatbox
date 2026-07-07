@@ -3717,7 +3717,7 @@ mod openapi_paths {
         responses(
             (status = 200, description = "JSON-RPC response"),
             (status = 202, description = "JSON-RPC notification accepted"),
-            (status = 403, description = "Origin not allowed", body = ErrorResponse)
+            (status = 403, description = "Origin not allowed")
         )
     )]
     pub fn mcp_post() {}

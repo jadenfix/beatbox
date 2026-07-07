@@ -24,14 +24,7 @@
             "description": "JSON-RPC notification accepted"
           },
           "403": {
-            "description": "Origin not allowed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
+            "description": "Origin not allowed"
           }
         }
       }
