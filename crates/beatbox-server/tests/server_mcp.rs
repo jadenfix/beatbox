@@ -3165,6 +3165,18 @@ async fn capabilities_embed_the_browser_profile_contract() -> Result<(), Box<dyn
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await?;
     let value: serde_json::Value = serde_json::from_slice(&body)?;
+    assert_eq!(value["ecosystem"]["service"], "cradle");
+    assert_eq!(
+        value["ecosystem"]["contract_version"],
+        "beatbox-ecosystem-integration-v1"
+    );
+    assert!(
+        value["ecosystem"]["lanes"]
+            .as_array()
+            .is_some_and(|lanes| lanes.iter().any(|lane| lane["lane"] == "wasm"
+                && lane["status"] == "runnable"
+                && lane["mcp_tool"] == "run_wasm"))
+    );
     assert_eq!(value["browser_sandbox"]["runnable_browser_sessions"], false);
     assert_eq!(
         value["browser_sandbox"]["default_level"],
@@ -3197,6 +3209,107 @@ async fn capabilities_embed_the_browser_profile_contract() -> Result<(), Box<dyn
             .is_some_and(|profiles| profiles
                 .iter()
                 .all(|profile| profile["availability"] != "available"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn integration_contract_reports_runnable_wasm_and_planned_lanes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = router(ServerConfig::new(BeatboxEngine::new()?));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/integration")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let value: serde_json::Value = serde_json::from_slice(&body)?;
+    assert_eq!(value["service"], "cradle");
+    assert_eq!(
+        value["auth"]["preferred_header"],
+        "Authorization: Bearer <token>"
+    );
+    assert!(value["stable_identity"].as_array().is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| item.as_str().is_some_and(|item| item.contains("beatbox")))
+    }));
+    let lanes = value["lanes"]
+        .as_array()
+        .ok_or("integration contract should include lanes")?;
+    let wasm = lanes
+        .iter()
+        .find(|lane| lane["lane"] == "wasm")
+        .ok_or("wasm lane should be listed")?;
+    assert_eq!(wasm["status"], "runnable");
+    assert_eq!(wasm["sync_endpoint"], "/v1/execute");
+    assert_eq!(wasm["job_endpoint"], "/v1/jobs");
+    assert_eq!(wasm["mcp_tool"], "run_wasm");
+    assert!(
+        value["auth"]["required_for"]
+            .as_array()
+            .is_some_and(
+                |required| required.iter().any(|item| item == "/mcp tools/list")
+                    && required.iter().any(|item| item == "/mcp tools/call")
+            )
+    );
+    let rest = value["rest"]
+        .as_array()
+        .ok_or("integration contract should include REST endpoints")?;
+    for path in [
+        "/v1/browser/adapter/capability",
+        "/v1/browser/adapter/register",
+        "/v1/browser/adapter/launch/plan",
+        "/v1/browser/adapter/launch/claim",
+        "/v1/browser/adapter/validate",
+        "/v1/browser/adapter/completion/validate",
+    ] {
+        assert!(
+            rest.iter().any(|endpoint| endpoint["path"] == path),
+            "missing REST endpoint {path}"
+        );
+    }
+    let mcp = value["mcp"]
+        .as_array()
+        .ok_or("integration contract should include MCP tools")?;
+    assert!(
+        mcp.iter()
+            .any(|tool| tool["name"] == "register_browser_adapter")
+    );
+    assert!(value["sdk_methods"].as_array().is_some_and(|methods| {
+        methods.iter().any(|method| method == "integration")
+            && methods
+                .iter()
+                .any(|method| method == "browser_adapter_capability")
+            && methods
+                .iter()
+                .any(|method| method == "browser_adapter_launch_claim")
+    }));
+    assert!(
+        wasm["accepted_sources"]
+            .as_array()
+            .is_some_and(|sources| sources.iter().any(|source| source == "wasm_wat"))
+    );
+    assert!(
+        lanes
+            .iter()
+            .any(|lane| lane["lane"] == "python_wasi" && lane["status"] == "planned_fail_closed")
+    );
+    assert!(value["consumers"].as_array().is_some_and(|consumers| {
+        consumers
+            .iter()
+            .any(|consumer| consumer["project"] == "tempo")
+    }));
+    assert!(
+        value["non_goals"]
+            .as_array()
+            .is_some_and(|non_goals| non_goals.iter().any(|non_goal| non_goal
+                .as_str()
+                .is_some_and(|non_goal| non_goal.contains("not runnable yet"))))
     );
     Ok(())
 }
@@ -3274,6 +3387,7 @@ async fn openapi_lists_jobs_surface() -> Result<(), Box<dyn std::error::Error>> 
         value["paths"]
             .as_object()
             .is_some_and(|paths| paths.contains_key("/v1/jobs")
+                && paths.contains_key("/v1/integration")
                 && paths.contains_key("/v1/browser/profiles")
                 && paths.contains_key("/v1/browser/admit")
                 && paths.contains_key("/v1/browser/adapter/contract")
@@ -3340,9 +3454,23 @@ async fn openapi_lists_jobs_surface() -> Result<(), Box<dyn std::error::Error>> 
         "CapabilitiesResponse",
         "CapabilityLane",
         "CapabilityLimits",
+        "EcosystemAuthContract",
+        "EcosystemConsumerContract",
+        "EcosystemEndpointContract",
+        "EcosystemIntegrationContract",
+        "EcosystemLaneContract",
+        "EcosystemMcpToolContract",
     ] {
         assert!(schemas.contains_key(expected), "missing schema: {expected}");
     }
+    let integration_200 = &value["paths"]["/v1/integration"]["get"]["responses"]["200"];
+    let integration_ref = integration_200["content"]["application/json"]["schema"]["$ref"]
+        .as_str()
+        .ok_or("integration 200 should reference a schema")?;
+    assert!(
+        integration_ref.ends_with("/EcosystemIntegrationContract"),
+        "got {integration_ref}"
+    );
     let capabilities_200 = &value["paths"]["/v1/capabilities"]["get"]["responses"]["200"];
     let schema_ref = capabilities_200["content"]["application/json"]["schema"]["$ref"]
         .as_str()
@@ -3354,8 +3482,11 @@ async fn openapi_lists_jobs_surface() -> Result<(), Box<dyn std::error::Error>> 
     assert!(
         schemas["CapabilitiesResponse"]["required"]
             .as_array()
-            .is_some_and(|required| required.iter().any(|field| field == "browser_sandbox")),
-        "capabilities schema should require browser_sandbox"
+            .is_some_and(
+                |required| required.iter().any(|field| field == "browser_sandbox")
+                    && required.iter().any(|field| field == "ecosystem")
+            ),
+        "capabilities schema should require browser_sandbox and ecosystem"
     );
     let manifest_properties = &schemas["BrowserAdapterManifestRequest"]["properties"];
     assert_eq!(manifest_properties["adapter_id"]["minLength"], 1);
@@ -3697,6 +3828,7 @@ async fn mcp_lists_tools() -> Result<(), Box<dyn std::error::Error>> {
     let tools = &value["result"]["tools"];
     assert!(tools.to_string().contains("run_wasm"));
     assert!(tools.to_string().contains("get_capabilities"));
+    assert!(tools.to_string().contains("get_integration_contract"));
     assert!(tools.to_string().contains("get_browser_profiles"));
     assert!(tools.to_string().contains("admit_browser_session"));
     assert!(tools.to_string().contains("get_browser_adapter_contract"));
@@ -3727,6 +3859,18 @@ async fn mcp_lists_tools() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("get_browser_adapter_contract tool should be listed")?;
     assert_eq!(
         contract_tool["inputSchema"]["additionalProperties"],
+        serde_json::json!(false)
+    );
+    let integration_tool = tools
+        .as_array()
+        .and_then(|tools| {
+            tools
+                .iter()
+                .find(|tool| tool["name"] == "get_integration_contract")
+        })
+        .ok_or("get_integration_contract tool should be listed")?;
+    assert_eq!(
+        integration_tool["inputSchema"]["additionalProperties"],
         serde_json::json!(false)
     );
     let register_tool = tools
@@ -3932,6 +4076,40 @@ async fn mcp_get_capabilities_rejects_unknown_arguments() -> Result<(), Box<dyn 
         "method": "tools/call",
         "params": {
             "name": "get_capabilities",
+            "arguments": {"ignored": true}
+        }
+    });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/mcp")
+                .header("content-type", "application/json")
+                .body(Body::from(request.to_string()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let value: serde_json::Value = serde_json::from_slice(&body)?;
+    assert_eq!(value["error"]["code"], -32602);
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("ignored"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_get_integration_contract_rejects_unknown_arguments()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = router(ServerConfig::new(BeatboxEngine::new()?));
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "get_integration_contract",
             "arguments": {"ignored": true}
         }
     });
@@ -4178,6 +4356,42 @@ async fn mcp_get_browser_profiles_returns_structured_content()
             .is_some_and(|profiles| profiles
                 .iter()
                 .all(|profile| profile["availability"] != "available"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_get_integration_contract_returns_structured_content()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = router(ServerConfig::new(BeatboxEngine::new()?));
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": "get_integration_contract", "arguments": {}}
+    });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/mcp")
+                .header("content-type", "application/json")
+                .body(Body::from(request.to_string()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let value: serde_json::Value = serde_json::from_slice(&body)?;
+    let result = &value["result"];
+    assert_eq!(result["isError"], serde_json::json!(false));
+    assert_eq!(result["content"][0]["text"], "cradle integration contract");
+    assert_eq!(result["structuredContent"]["service"], "cradle");
+    assert!(
+        result["structuredContent"]["lanes"]
+            .as_array()
+            .is_some_and(|lanes| lanes
+                .iter()
+                .any(|lane| lane["lane"] == "wasm" && lane["status"] == "runnable"))
     );
     Ok(())
 }

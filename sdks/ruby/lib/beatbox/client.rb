@@ -41,6 +41,11 @@ module Beatbox
       request_json(:get, "/v1/capabilities", auth: true)
     end
 
+    # GET /v1/integration. Returns raw ecosystem integration contract JSON.
+    def integration
+      request_json(:get, "/v1/integration", auth: true)
+    end
+
     # GET /v1/browser/profiles. Returns browser sandbox discovery metadata.
     def browser_profiles
       request_json(:get, "/v1/browser/profiles", auth: true)

@@ -64,6 +64,14 @@ public sealed class BeatboxClient : IDisposable
         return await ReadJsonAsync<JsonElement>(response, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>GET <c>/v1/integration</c>. Returns the raw ecosystem integration contract JSON.</summary>
+    public async Task<JsonElement> IntegrationAsync(CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(HttpMethod.Get, "/v1/integration", auth: true, content: null, cancellationToken)
+            .ConfigureAwait(false);
+        return await ReadJsonAsync<JsonElement>(response, cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>GET <c>/v1/browser/profiles</c>. Returns browser sandbox discovery metadata.</summary>
     public async Task<JsonElement> BrowserProfilesAsync(CancellationToken cancellationToken = default)
     {

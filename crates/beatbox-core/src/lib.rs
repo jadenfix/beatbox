@@ -1141,6 +1141,9 @@ pub struct CapabilitiesResponse {
     pub lanes: Vec<CapabilityLane>,
     pub limits: CapabilityLimits,
     pub engines: BTreeMap<String, String>,
+    #[serde(default)]
+    #[schema(required = true)]
+    pub ecosystem: EcosystemIntegrationContract,
     pub browser_sandbox: BrowserProfilesResponse,
     /// Aether-compatible payment evidence accepted by the MCP boundary. The
     /// payload header is never echoed; only its companion hash may be surfaced
@@ -1148,6 +1151,123 @@ pub struct CapabilitiesResponse {
     #[serde(default)]
     #[schema(required = true)]
     pub aether_payment: AetherPaymentContextCapabilities,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EcosystemIntegrationContract {
+    pub service: String,
+    pub contract_version: String,
+    pub status: String,
+    pub summary: String,
+    pub stable_identity: Vec<String>,
+    pub auth: EcosystemAuthContract,
+    pub lanes: Vec<EcosystemLaneContract>,
+    pub rest: Vec<EcosystemEndpointContract>,
+    pub mcp: Vec<EcosystemMcpToolContract>,
+    pub sdk_methods: Vec<String>,
+    pub consumers: Vec<EcosystemConsumerContract>,
+    pub readiness_checks: Vec<String>,
+    pub non_goals: Vec<String>,
+}
+
+impl Default for EcosystemIntegrationContract {
+    fn default() -> Self {
+        Self {
+            service: "cradle".to_string(),
+            contract_version: "beatbox-ecosystem-integration-v1".to_string(),
+            status: "wasm_ready_other_lanes_planned".to_string(),
+            summary:
+                "Runnable Wasm sandbox service with stable beatbox REST, MCP, OpenAPI, and SDK boundaries for ecosystem callers."
+                    .to_string(),
+            stable_identity: vec![
+                "crate and binary names remain beatbox/beatboxd".to_string(),
+                "repository redirects may rename the GitHub project, but wire contracts keep beatbox naming"
+                    .to_string(),
+            ],
+            auth: EcosystemAuthContract::default(),
+            lanes: Vec::new(),
+            rest: Vec::new(),
+            mcp: Vec::new(),
+            sdk_methods: Vec::new(),
+            consumers: Vec::new(),
+            readiness_checks: Vec::new(),
+            non_goals: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EcosystemAuthContract {
+    pub required_for: Vec<String>,
+    pub unauthenticated: Vec<String>,
+    pub preferred_header: String,
+    pub compatibility_header: String,
+    pub secret_handling: Vec<String>,
+}
+
+impl Default for EcosystemAuthContract {
+    fn default() -> Self {
+        Self {
+            required_for: vec![
+                "/v1/capabilities".to_string(),
+                "/v1/integration".to_string(),
+                "/v1/execute".to_string(),
+                "/v1/jobs".to_string(),
+                "/mcp tools/list".to_string(),
+                "/mcp tools/call".to_string(),
+            ],
+            unauthenticated: vec!["/v1/health".to_string(), "/openapi.json".to_string()],
+            preferred_header: "Authorization: Bearer <token>".to_string(),
+            compatibility_header: "x-beatbox-api-key: <token>".to_string(),
+            secret_handling: vec![
+                "tokens must never appear in URLs".to_string(),
+                "tokens must not be echoed in errors, MCP content, or logs".to_string(),
+            ],
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EcosystemLaneContract {
+    pub lane: Lane,
+    pub status: String,
+    pub substrate: String,
+    pub sync_endpoint: Option<String>,
+    pub job_endpoint: Option<String>,
+    pub mcp_tool: Option<String>,
+    pub accepted_sources: Vec<String>,
+    pub guarantees: Vec<String>,
+    pub required_next_steps: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EcosystemEndpointContract {
+    pub method: String,
+    pub path: String,
+    pub auth_required: bool,
+    pub purpose: String,
+    pub stability: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EcosystemMcpToolContract {
+    pub name: String,
+    pub status: String,
+    pub purpose: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EcosystemConsumerContract {
+    pub project: String,
+    pub boundary: String,
+    pub status: String,
+    pub notes: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]

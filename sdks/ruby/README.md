@@ -89,6 +89,7 @@ trailing whitespace are rejected before any request can be built.
 | --- | --- | --- | --- |
 | `client.health` | `GET /v1/health` | no | `Hash` (raw JSON) |
 | `client.capabilities` | `GET /v1/capabilities` | yes | `Hash` (raw JSON) |
+| `client.integration` | `GET /v1/integration` | yes | `Hash` (raw JSON) |
 | `client.browser_profiles` | `GET /v1/browser/profiles` | yes | `Hash` (raw JSON) |
 | `client.browser_admit(request)` | `POST /v1/browser/admit` | yes | `Hash` (raw JSON) |
 | `client.browser_adapter_contract` | `GET /v1/browser/adapter/contract` | yes | `Hash` (raw JSON) |

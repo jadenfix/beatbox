@@ -32,9 +32,10 @@ use beatbox_core::{
     BrowserSandboxControl, BrowserSandboxLevel, BrowserSandboxProfile,
     BrowserSensitiveActivityMode, BrowserSensitivity, BrowserSessionActor, BrowserStorageGuardPlan,
     BrowserSuppressionGuardPlan, CapabilitiesResponse, CapabilityLane, CapabilityLimits,
-    CreateJobResponse, ErrorBody, ErrorResponse, ExecuteRequest, ExecutionResult, ExecutionStatus,
-    JobRecord, Lane, Policy, Source, browser_adapter_launch_template_expires_at,
-    browser_adapter_launch_template_issued_at,
+    CreateJobResponse, EcosystemConsumerContract, EcosystemEndpointContract,
+    EcosystemIntegrationContract, EcosystemLaneContract, EcosystemMcpToolContract, ErrorBody,
+    ErrorResponse, ExecuteRequest, ExecutionResult, ExecutionStatus, JobRecord, Lane, Policy,
+    Source, browser_adapter_launch_template_expires_at, browser_adapter_launch_template_issued_at,
 };
 use beatbox_engine::{BeatboxEngine, CancelFlag, EngineError};
 use bytes::Bytes;
@@ -257,6 +258,7 @@ pub fn router(config: ServerConfig) -> Router {
         .route("/v1/health", get(health))
         .route("/openapi.json", get(openapi))
         .route("/v1/capabilities", get(capabilities))
+        .route("/v1/integration", get(integration))
         .route("/v1/browser/profiles", get(browser_profiles))
         .route("/v1/browser/admit", post(browser_admit))
         .route(
@@ -308,6 +310,14 @@ async fn capabilities(
 ) -> Result<Json<CapabilitiesResponse>, ApiError> {
     state.authorize(&headers)?;
     Ok(Json(capabilities_json(&state.config)))
+}
+
+async fn integration(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<EcosystemIntegrationContract>, ApiError> {
+    state.authorize(&headers)?;
+    Ok(Json(ecosystem_integration_contract()))
 }
 
 async fn browser_profiles(
@@ -1048,8 +1058,239 @@ fn capabilities_json(config: &ServerConfig) -> CapabilitiesResponse {
             max_concurrent_jobs: config.max_concurrent_jobs,
         },
         engines: BTreeMap::from([("wasmtime".to_string(), "45".to_string())]),
+        ecosystem: ecosystem_integration_contract(),
         browser_sandbox: browser_profiles_response(),
         aether_payment: aether_payment_capabilities(),
+    }
+}
+
+fn ecosystem_integration_contract() -> EcosystemIntegrationContract {
+    EcosystemIntegrationContract {
+        lanes: vec![
+            EcosystemLaneContract {
+                lane: Lane::Wasm,
+                status: "runnable".to_string(),
+                substrate: "wasmtime".to_string(),
+                sync_endpoint: Some("/v1/execute".to_string()),
+                job_endpoint: Some("/v1/jobs".to_string()),
+                mcp_tool: Some("run_wasm".to_string()),
+                accepted_sources: vec![
+                    "wasm_wat".to_string(),
+                    "wasm_bytes_base64".to_string(),
+                    "local CLI only: wasm_file".to_string(),
+                ],
+                guarantees: vec![
+                    "empty linker rejects host imports by default".to_string(),
+                    "fuel and epoch interruption bound runaway execution".to_string(),
+                    "store limits bound guest memory".to_string(),
+                    "results include deterministic inputs_digest and effective_isolation".to_string(),
+                ],
+                required_next_steps: Vec::new(),
+            },
+            planned_lane_contract(
+                Lane::PythonWasi,
+                "wasmtime",
+                Some("run_python"),
+                vec!["inline source code"],
+                vec![
+                    "ship a Python WASI runtime module",
+                    "bind filesystem, network, env, and package policy before marking runnable",
+                ],
+            ),
+            planned_lane_contract(
+                Lane::JsWasm,
+                "wasmtime",
+                Some("run_javascript"),
+                vec!["inline source code"],
+                vec![
+                    "ship a JavaScript WASI runtime module",
+                    "bind filesystem, network, env, and package policy before marking runnable",
+                ],
+            ),
+            planned_lane_contract(
+                Lane::PythonNative,
+                "os_jail",
+                None,
+                vec!["inline source code"],
+                vec![
+                    "choose and enforce the OS jail substrate",
+                    "prove filesystem, process, network, secret, and teardown boundaries",
+                ],
+            ),
+            planned_lane_contract(
+                Lane::JsNative,
+                "os_jail",
+                None,
+                vec!["inline source code"],
+                vec![
+                    "choose and enforce the OS jail substrate",
+                    "prove filesystem, process, network, secret, and teardown boundaries",
+                ],
+            ),
+            planned_lane_contract(
+                Lane::Exec,
+                "os_jail",
+                None,
+                vec!["inline exec source"],
+                vec![
+                    "define command/package admission",
+                    "prove process, filesystem, network, and teardown isolation",
+                ],
+            ),
+        ],
+        rest: vec![
+            endpoint_contract("GET", "/v1/health", false, "daemon liveness"),
+            endpoint_contract("GET", "/openapi.json", false, "OpenAPI contract for generated clients"),
+            endpoint_contract("GET", "/v1/capabilities", true, "lane availability, limits, and integration summary"),
+            endpoint_contract("GET", "/v1/integration", true, "focused ecosystem integration contract"),
+            endpoint_contract("POST", "/v1/execute", true, "synchronous Wasm execution"),
+            endpoint_contract("POST", "/v1/jobs", true, "asynchronous execution enqueue"),
+            endpoint_contract("GET", "/v1/jobs/{id}", true, "asynchronous job lookup"),
+            endpoint_contract("DELETE", "/v1/jobs/{id}", true, "best-effort job cancellation"),
+            endpoint_contract("GET", "/v1/browser/profiles", true, "fail-closed browser profile discovery"),
+            endpoint_contract("POST", "/v1/browser/admit", true, "fail-closed browser admission preflight"),
+            endpoint_contract("GET", "/v1/browser/adapter/contract", true, "browser adapter compatibility contract"),
+            endpoint_contract("POST", "/v1/browser/adapter/capability", true, "REST-only same-user adapter capability issuer"),
+            endpoint_contract("POST", "/v1/browser/adapter/register", true, "fail-closed browser adapter registration preflight"),
+            endpoint_contract("POST", "/v1/browser/adapter/launch/plan", true, "fail-closed browser adapter launch plan preflight"),
+            endpoint_contract("POST", "/v1/browser/adapter/launch/claim", true, "fail-closed browser adapter launch claim preflight"),
+            endpoint_contract("POST", "/v1/browser/adapter/validate", true, "fail-closed browser adapter manifest validation"),
+            endpoint_contract("POST", "/v1/browser/adapter/completion/validate", true, "fail-closed browser adapter completion proof validation"),
+            endpoint_contract("POST", "/mcp", true, "stateless MCP JSON-RPC endpoint"),
+        ],
+        mcp: vec![
+            mcp_tool_contract("get_capabilities", "runnable", "lane and limit discovery"),
+            mcp_tool_contract("get_integration_contract", "runnable", "ecosystem integration discovery"),
+            mcp_tool_contract("run_wasm", "runnable", "hermetic Wasm execution"),
+            mcp_tool_contract("run_python", "planned_fail_closed", "planned Python WASI lane"),
+            mcp_tool_contract("run_javascript", "planned_fail_closed", "planned JavaScript WASI lane"),
+            mcp_tool_contract("get_browser_profiles", "planned_fail_closed", "browser profile discovery"),
+            mcp_tool_contract("admit_browser_session", "planned_fail_closed", "browser admission preflight"),
+            mcp_tool_contract("get_browser_adapter_contract", "planned_fail_closed", "browser adapter compatibility"),
+            mcp_tool_contract("register_browser_adapter", "planned_fail_closed", "browser adapter manifest-only registration preflight"),
+            mcp_tool_contract("validate_browser_adapter", "planned_fail_closed", "browser adapter manifest validation"),
+            mcp_tool_contract(
+                "validate_browser_adapter_completion",
+                "planned_fail_closed",
+                "browser adapter completion proof validation",
+            ),
+        ],
+        sdk_methods: vec![
+            "health".to_string(),
+            "capabilities".to_string(),
+            "integration".to_string(),
+            "openapi".to_string(),
+            "execute".to_string(),
+            "create_job".to_string(),
+            "get_job".to_string(),
+            "cancel_job".to_string(),
+            "browser_profiles".to_string(),
+            "browser_admit".to_string(),
+            "browser_adapter_contract".to_string(),
+            "browser_adapter_capability".to_string(),
+            "browser_adapter_register".to_string(),
+            "browser_adapter_launch_plan".to_string(),
+            "browser_adapter_launch_claim".to_string(),
+            "browser_adapter_validate".to_string(),
+            "browser_adapter_completion_validate".to_string(),
+        ],
+        consumers: vec![
+            EcosystemConsumerContract {
+                project: "tempo".to_string(),
+                boundary: "REST or MCP tool execution through /v1/execute, /v1/jobs, and /mcp"
+                    .to_string(),
+                status: "wasm_ready".to_string(),
+                notes: vec![
+                    "probe /v1/integration or get_integration_contract before offering non-Wasm lanes"
+                        .to_string(),
+                    "browser work must call admission/adapter preflights and remain fail-closed today"
+                        .to_string(),
+                ],
+            },
+            EcosystemConsumerContract {
+                project: "beater.js".to_string(),
+                boundary: "untrusted code should cross process/protocol boundaries instead of linking directly"
+                    .to_string(),
+                status: "wasm_ready".to_string(),
+                notes: vec![
+                    "send WAT or base64 Wasm to the daemon; daemon-local wasm_file paths are CLI-only"
+                        .to_string(),
+                ],
+            },
+            EcosystemConsumerContract {
+                project: "beaterOS".to_string(),
+                boundary: "auditable side-effect systems should consume job ids, result digests, and egress records"
+                    .to_string(),
+                status: "wasm_ready".to_string(),
+                notes: vec![
+                    "result metadata is stable enough for audit correlation; native exec remains planned"
+                        .to_string(),
+                ],
+            },
+        ],
+        readiness_checks: vec![
+            "GET /v1/health returns status=ok".to_string(),
+            "GET /v1/integration reports lane wasm as runnable".to_string(),
+            "POST /v1/execute with wasm_wat or wasm_bytes_base64 returns ExecutionResult".to_string(),
+            "MCP tools/list includes get_integration_contract and run_wasm".to_string(),
+            "MCP tools/call run_python and run_javascript remain fail-closed until their lanes are implemented"
+                .to_string(),
+        ],
+        non_goals: vec![
+            "Python, JavaScript, native exec, and browser sessions are not runnable yet".to_string(),
+            "browser adapter validation is compatibility metadata, not registration or launch trust"
+                .to_string(),
+            "remote REST callers cannot reference daemon-local source paths".to_string(),
+        ],
+        ..EcosystemIntegrationContract::default()
+    }
+}
+
+fn planned_lane_contract(
+    lane: Lane,
+    substrate: &str,
+    mcp_tool: Option<&str>,
+    accepted_sources: Vec<&str>,
+    required_next_steps: Vec<&str>,
+) -> EcosystemLaneContract {
+    EcosystemLaneContract {
+        lane,
+        status: "planned_fail_closed".to_string(),
+        substrate: substrate.to_string(),
+        sync_endpoint: Some("/v1/execute".to_string()),
+        job_endpoint: Some("/v1/jobs".to_string()),
+        mcp_tool: mcp_tool.map(str::to_string),
+        accepted_sources: accepted_sources.into_iter().map(str::to_string).collect(),
+        guarantees: vec![
+            "request shape is admitted only far enough to return an explicit unavailable-lane result"
+                .to_string(),
+            "capabilities and integration contracts must continue to report this lane as not runnable"
+                .to_string(),
+        ],
+        required_next_steps: required_next_steps.into_iter().map(str::to_string).collect(),
+    }
+}
+
+fn endpoint_contract(
+    method: &str,
+    path: &str,
+    auth_required: bool,
+    purpose: &str,
+) -> EcosystemEndpointContract {
+    EcosystemEndpointContract {
+        method: method.to_string(),
+        path: path.to_string(),
+        auth_required,
+        purpose: purpose.to_string(),
+        stability: "stable_v1".to_string(),
+    }
+}
+
+fn mcp_tool_contract(name: &str, status: &str, purpose: &str) -> EcosystemMcpToolContract {
+    EcosystemMcpToolContract {
+        name: name.to_string(),
+        status: status.to_string(),
+        purpose: purpose.to_string(),
     }
 }
 
@@ -3403,6 +3644,7 @@ pub fn openapi_spec_json() -> String {
     paths(
         openapi_paths::health,
         openapi_paths::capabilities,
+        openapi_paths::integration,
         openapi_paths::browser_profiles,
         openapi_paths::browser_admit,
         openapi_paths::browser_adapter_contract_get,
@@ -3486,6 +3728,12 @@ pub fn openapi_spec_json() -> String {
         beatbox_core::CapabilitiesResponse,
         beatbox_core::CapabilityLane,
         beatbox_core::CapabilityLimits,
+        beatbox_core::EcosystemAuthContract,
+        beatbox_core::EcosystemConsumerContract,
+        beatbox_core::EcosystemEndpointContract,
+        beatbox_core::EcosystemIntegrationContract,
+        beatbox_core::EcosystemLaneContract,
+        beatbox_core::EcosystemMcpToolContract,
     )),
     tags(
         (name = "v1", description = "beatbox REST API"),
@@ -3504,8 +3752,8 @@ mod openapi_paths {
         BrowserAdapterLaunchPlanResponse, BrowserAdapterManifestRequest,
         BrowserAdapterManifestResponse, BrowserAdapterRegistrationRequest,
         BrowserAdapterRegistrationResponse, BrowserAdmissionRequest, BrowserAdmissionResponse,
-        BrowserProfilesResponse, CapabilitiesResponse, CreateJobResponse, ErrorResponse,
-        ExecuteRequest, ExecutionResult, JobRecord,
+        BrowserProfilesResponse, CapabilitiesResponse, CreateJobResponse,
+        EcosystemIntegrationContract, ErrorResponse, ExecuteRequest, ExecutionResult, JobRecord,
     };
 
     #[utoipa::path(
@@ -3527,6 +3775,18 @@ mod openapi_paths {
         )
     )]
     pub fn capabilities() {}
+
+    #[utoipa::path(
+        get,
+        path = "/v1/integration",
+        operation_id = "getIntegrationContract",
+        tag = "v1",
+        responses(
+            (status = 200, description = "Focused ecosystem integration contract", body = EcosystemIntegrationContract),
+            (status = 401, description = "Missing or invalid bearer token", body = ErrorResponse)
+        )
+    )]
+    pub fn integration() {}
 
     #[utoipa::path(
         get,
@@ -4022,6 +4282,11 @@ fn mcp_tools() -> Value {
             "inputSchema": {"type": "object", "additionalProperties": false}
         },
         {
+            "name": "get_integration_contract",
+            "description": "Return Cradle's ecosystem integration contract: runnable Wasm surfaces, planned fail-closed lanes, auth posture, REST/MCP boundaries, and sibling-consumer expectations.",
+            "inputSchema": {"type": "object", "additionalProperties": false}
+        },
+        {
             "name": "get_browser_profiles",
             "description": "Return beatbox browser sandbox profile discovery metadata and the planned adapter handoff contract for Tempo-style integrations.",
             "inputSchema": {"type": "object", "additionalProperties": false}
@@ -4365,6 +4630,15 @@ async fn mcp_tools_call(
             Ok(json!({
                 "content": [{"type": "text", "text": "beatbox capabilities"}],
                 "structuredContent": capabilities,
+                "isError": false,
+            }))
+        }
+        "get_integration_contract" => {
+            mcp_tool_arguments(&arguments, "get_integration_contract", &[])?;
+            let integration = ecosystem_integration_contract();
+            Ok(json!({
+                "content": [{"type": "text", "text": "cradle integration contract"}],
+                "structuredContent": integration,
                 "isError": false,
             }))
         }

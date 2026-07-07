@@ -72,6 +72,12 @@ impl Client {
         decode_response(response).await
     }
 
+    pub async fn integration(&self) -> Result<EcosystemIntegrationContract, ClientError> {
+        let request = self.http.get(format!("{}/v1/integration", self.base_url));
+        let response = self.authorize(request).send().await?;
+        decode_response(response).await
+    }
+
     pub async fn browser_profiles(&self) -> Result<BrowserProfilesResponse, ClientError> {
         let request = self
             .http
@@ -463,6 +469,69 @@ mod tests {
         }
         let request = request_rx.recv_timeout(Duration::from_secs(1))?;
         assert!(request.starts_with("GET /api/v1/capabilities "));
+        assert!(request.contains("x-beatbox-api-key: secret"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn integration_gets_authenticated_json()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let addr = listener.local_addr()?;
+        let (request_tx, request_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || -> std::io::Result<()> {
+            let (mut stream, _) = listener.accept()?;
+            stream.set_read_timeout(Some(Duration::from_secs(1)))?;
+            let mut buffer = [0_u8; 4096];
+            let bytes = stream.read(&mut buffer)?;
+            let request = String::from_utf8_lossy(&buffer[..bytes]).to_string();
+            request_tx
+                .send(request)
+                .map_err(|_| std::io::Error::other("request receiver dropped"))?;
+            let body = r#"{
+                "service": "cradle",
+                "contract_version": "beatbox-ecosystem-integration-v1",
+                "status": "wasm_ready_other_lanes_planned",
+                "summary": "test",
+                "stable_identity": [],
+                "auth": {
+                    "required_for": [],
+                    "unauthenticated": [],
+                    "preferred_header": "Authorization: Bearer <token>",
+                    "compatibility_header": "x-beatbox-api-key: <token>",
+                    "secret_handling": []
+                },
+                "lanes": [],
+                "rest": [],
+                "mcp": [],
+                "sdk_methods": [],
+                "consumers": [],
+                "readiness_checks": [],
+                "non_goals": []
+            }"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes())?;
+            Ok(())
+        });
+
+        let client = Client::new(format!("http://{addr}/api/")).with_api_key("secret");
+        let integration = client.integration().await?;
+        assert_eq!(integration.service, "cradle");
+        assert_eq!(
+            integration.contract_version,
+            "beatbox-ecosystem-integration-v1"
+        );
+
+        match server.join() {
+            Ok(result) => result?,
+            Err(_) => return Err("integration test server panicked".into()),
+        }
+        let request = request_rx.recv_timeout(Duration::from_secs(1))?;
+        assert!(request.starts_with("GET /api/v1/integration "));
         assert!(request.contains("x-beatbox-api-key: secret"));
         Ok(())
     }

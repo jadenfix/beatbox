@@ -66,6 +66,7 @@ is never included in any error message or thrown object.
 | --- | --- | --- | --- |
 | `health()` | `GET /v1/health` | no | `HealthResponse` |
 | `capabilities()` | `GET /v1/capabilities` | yes | raw JSON (`unknown`) |
+| `integration()` | `GET /v1/integration` | yes | raw JSON (`unknown`) |
 | `browserProfiles()` | `GET /v1/browser/profiles` | yes | raw JSON (`unknown`) |
 | `admitBrowserSession(req)` | `POST /v1/browser/admit` | yes | raw JSON (`unknown`) |
 | `browserAdapterContract()` | `GET /v1/browser/adapter/contract` | yes | raw JSON (`unknown`) |

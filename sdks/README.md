@@ -28,6 +28,7 @@ the same methods:
 | --- | --- | --- |
 | `health` | `GET /v1/health` | no |
 | `capabilities` | `GET /v1/capabilities` | yes |
+| `integration` / `getIntegrationContract` | `GET /v1/integration` | yes |
 | `browser_profiles` / `browserProfiles` | `GET /v1/browser/profiles` | yes |
 | `browser_admit` / `admitBrowserSession` | `POST /v1/browser/admit` | yes |
 | `browser_adapter_contract` / `browserAdapterContract` | `GET /v1/browser/adapter/contract` | yes |

@@ -175,6 +175,15 @@ export class BeatboxClient {
     });
   }
 
+  /** `GET /v1/integration` — ecosystem integration contract. */
+  integration(): Promise<unknown> {
+    return this.request<unknown>({
+      method: "GET",
+      path: "/v1/integration",
+      auth: true,
+    });
+  }
+
   /** `GET /v1/browser/profiles` — browser sandbox profile discovery. */
   browserProfiles(): Promise<unknown> {
     return this.request<unknown>({

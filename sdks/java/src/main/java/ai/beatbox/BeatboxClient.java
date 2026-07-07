@@ -74,6 +74,11 @@ public final class BeatboxClient {
         return sendForJson("GET", uri("/v1/capabilities"), true, null);
     }
 
+    /** {@code GET /v1/integration}. Returns the raw ecosystem integration contract JSON. */
+    public JsonNode integration() {
+        return sendForJson("GET", uri("/v1/integration"), true, null);
+    }
+
     /** {@code GET /v1/browser/profiles}. Returns browser sandbox discovery metadata. */
     public JsonNode browserProfiles() {
         return sendForJson("GET", uri("/v1/browser/profiles"), true, null);

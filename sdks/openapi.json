@@ -542,6 +542,36 @@
         }
       }
     },
+    "/v1/integration": {
+      "get": {
+        "tags": [
+          "v1"
+        ],
+        "operationId": "getIntegrationContract",
+        "responses": {
+          "200": {
+            "description": "Focused ecosystem integration contract",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EcosystemIntegrationContract"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/jobs": {
       "post": {
         "tags": [
@@ -2550,6 +2580,7 @@
           "lanes",
           "limits",
           "engines",
+          "ecosystem",
           "browser_sandbox",
           "aether_payment"
         ],
@@ -2560,6 +2591,9 @@
           },
           "browser_sandbox": {
             "$ref": "#/components/schemas/BrowserProfilesResponse"
+          },
+          "ecosystem": {
+            "$ref": "#/components/schemas/EcosystemIntegrationContract"
           },
           "engines": {
             "type": "object",
@@ -2747,6 +2781,261 @@
             }
           }
         ]
+      },
+      "EcosystemAuthContract": {
+        "type": "object",
+        "required": [
+          "required_for",
+          "unauthenticated",
+          "preferred_header",
+          "compatibility_header",
+          "secret_handling"
+        ],
+        "properties": {
+          "compatibility_header": {
+            "type": "string"
+          },
+          "preferred_header": {
+            "type": "string"
+          },
+          "required_for": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "secret_handling": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "unauthenticated": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "EcosystemConsumerContract": {
+        "type": "object",
+        "required": [
+          "project",
+          "boundary",
+          "status",
+          "notes"
+        ],
+        "properties": {
+          "boundary": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "project": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "EcosystemEndpointContract": {
+        "type": "object",
+        "required": [
+          "method",
+          "path",
+          "auth_required",
+          "purpose",
+          "stability"
+        ],
+        "properties": {
+          "auth_required": {
+            "type": "boolean"
+          },
+          "method": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "stability": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "EcosystemIntegrationContract": {
+        "type": "object",
+        "required": [
+          "service",
+          "contract_version",
+          "status",
+          "summary",
+          "stable_identity",
+          "auth",
+          "lanes",
+          "rest",
+          "mcp",
+          "sdk_methods",
+          "consumers",
+          "readiness_checks",
+          "non_goals"
+        ],
+        "properties": {
+          "auth": {
+            "$ref": "#/components/schemas/EcosystemAuthContract"
+          },
+          "consumers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EcosystemConsumerContract"
+            }
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "lanes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EcosystemLaneContract"
+            }
+          },
+          "mcp": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EcosystemMcpToolContract"
+            }
+          },
+          "non_goals": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "readiness_checks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rest": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EcosystemEndpointContract"
+            }
+          },
+          "sdk_methods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "service": {
+            "type": "string"
+          },
+          "stable_identity": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "EcosystemLaneContract": {
+        "type": "object",
+        "required": [
+          "lane",
+          "status",
+          "substrate",
+          "accepted_sources",
+          "guarantees",
+          "required_next_steps"
+        ],
+        "properties": {
+          "accepted_sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "guarantees": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "job_endpoint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lane": {
+            "$ref": "#/components/schemas/Lane"
+          },
+          "mcp_tool": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "required_next_steps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string"
+          },
+          "substrate": {
+            "type": "string"
+          },
+          "sync_endpoint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "EcosystemMcpToolContract": {
+        "type": "object",
+        "required": [
+          "name",
+          "status",
+          "purpose"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       },
       "EffectiveIsolation": {
         "type": "object",

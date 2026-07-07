@@ -153,6 +153,13 @@ func (c *Client) Capabilities(ctx context.Context) (json.RawMessage, error) {
 	return out, err
 }
 
+// Integration returns the ecosystem integration contract (GET /v1/integration).
+func (c *Client) Integration(ctx context.Context) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := c.do(ctx, http.MethodGet, c.baseURL+"/v1/integration", true, nil, &out)
+	return out, err
+}
+
 // BrowserProfiles returns browser sandbox profile discovery metadata
 // (GET /v1/browser/profiles).
 func (c *Client) BrowserProfiles(ctx context.Context) (json.RawMessage, error) {

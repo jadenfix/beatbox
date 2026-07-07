@@ -64,6 +64,7 @@ HTTP handler also disables proxy use for secret-bearing requests.
 | --- | --- | --- | --- |
 | `HealthAsync()` | `GET /v1/health` | no | `JsonElement` |
 | `CapabilitiesAsync()` | `GET /v1/capabilities` | yes | `JsonElement` |
+| `IntegrationAsync()` | `GET /v1/integration` | yes | `JsonElement` |
 | `BrowserProfilesAsync()` | `GET /v1/browser/profiles` | yes | `JsonElement` |
 | `AdmitBrowserSessionAsync(req)` | `POST /v1/browser/admit` | yes | `JsonElement` |
 | `BrowserAdapterContractAsync()` | `GET /v1/browser/adapter/contract` | yes | `JsonElement` |

@@ -71,6 +71,7 @@ Redirects are never followed, so the api-key header can't leak cross-origin.
 | -------------------------- | ------------------------ | ------------------- |
 | `health()`                 | `GET /v1/health`         | `JsonNode` (raw)    |
 | `capabilities()`           | `GET /v1/capabilities`   | `JsonNode` (raw)    |
+| `integration()`            | `GET /v1/integration`    | `JsonNode` (raw)    |
 | `browserProfiles()`        | `GET /v1/browser/profiles` | `JsonNode` (raw)  |
 | `browserAdmit(request)`    | `POST /v1/browser/admit` | `JsonNode` (raw)    |
 | `browserAdapterContract()` | `GET /v1/browser/adapter/contract` | `JsonNode` (raw) |
