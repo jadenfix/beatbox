@@ -3,7 +3,7 @@
 > Status: design README. Proposes that `beatboxd`'s REST + MCP surface adopt the
 > **unified Google-AIP contract language** used across the Tempera stack,
 > canonically defined in
-> [`tempera-dev/data-engine`'s `API_STYLE.md`](https://github.com/tempera-dev/data-engine/blob/main/API_STYLE.md).
+> [`tempera-dev/data-engine`'s `API_STYLE.md`](https://github.com/tempera-dev/data-engine/pull/1).
 > No code here; this is the target contract + migration mapping. Cradle stays
 > standalone (protocol-boundary integration, no sibling dependency) — alignment is
 > about contract *shape*.
@@ -155,7 +155,7 @@ empty `egress[]` exactly as today.
 
 ## 7. Reference
 
-- Canonical language: [`tempera-dev/data-engine` → `API_STYLE.md`](https://github.com/tempera-dev/data-engine/blob/main/API_STYLE.md)
+- Canonical language: [`tempera-dev/data-engine` → `API_STYLE.md`](https://github.com/tempera-dev/data-engine/pull/1)
   (data-engine is the reference implementation; its `api/openapi.yaml` is the
   byte-for-byte oracle).
 - How data-engine calls cradle: `data-engine/CRADLE.md` (the wire shapes this PR
