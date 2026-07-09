@@ -1,10 +1,11 @@
 # Cradle (beatbox) API — AIP-style alignment with the Tempera stack
 
-> Status: design README. Proposes that `beatboxd`'s REST + MCP surface adopt the
+> Status: design README. Documents how `beatboxd`'s REST + MCP surface adopts the
 > **unified Google-AIP contract language** used across the Tempera stack,
 > canonically defined in
 > [`tempera-dev/data-engine`'s `API_STYLE.md`](https://github.com/tempera-dev/data-engine/pull/1).
-> No code here; this is the target contract + migration mapping. Cradle stays
+> No code here; this is the target contract + migration mapping. The implementation
+> consolidation is tracked in [`cradle#73`](https://github.com/jadenfix/cradle/pull/73). Cradle stays
 > standalone (protocol-boundary integration, no sibling dependency) — alignment is
 > about contract *shape*.
 >
@@ -66,7 +67,9 @@ fixture-pinned catalog + drift test.
 - No cursor pagination on any list (capabilities/jobs would want it).
 - `/openapi.json` is runtime-generated, not committed + drift-gated (the MCP
   catalog *is* fixture-drift-tested; the OpenAPI doc isn't).
-- operationIds aren't dotted `<collection>.<verb>`.
+- operationIds on `main` predate the shared `projects.*` contract; the alignment
+  branch moves the OpenAPI, client surface, and MCP projection to dotted
+  `projects.<collection>[.<subcollection>].<verb>` names.
 
 ---
 
@@ -77,18 +80,18 @@ Cradle is multi-tenant-light, so it uses a single default project parent
 
 | Current | AIP target | operationId |
 |---|---|---|
-| `POST /v1/execute` | `POST /v1/{parent=projects/*}/executions:run` | `executions.run` |
-| `POST /v1/jobs` | `POST /v1/{parent=projects/*}/jobs` → returns `Operation` | `jobs.create` |
-| `GET /v1/jobs/{id}` | `GET /v1/{name=projects/*/jobs/*}` | `jobs.get` |
-| `DELETE /v1/jobs/{id}` | `POST /v1/{name=projects/*/jobs/*}:cancel` | `jobs.cancel` |
-| `GET /v1/capabilities` | `GET /v1/{parent=projects/*}/capabilities` | `capabilities.get` |
-| `GET /v1/integration` | `GET /v1/{parent=projects/*}/integration` | `integration.get` |
-| `GET /v1/browser/profiles` | `GET /v1/{parent=projects/*}/browserProfiles` | `browserProfiles.list` |
-| `POST /v1/browser/admit` | `POST /v1/{parent=projects/*}/browserSessions:admit` | `browserSessions.admit` |
-| browser adapter/* | `POST /v1/{parent=projects/*}/browserAdapters:validate` etc. | `browserAdapters.{validate,register,plan,claim}` |
-| (job poll) | `GET /v1/{name=projects/*/operations/*}` | `operations.get` |
+| `POST /v1/execute` | `POST /v1/{parent=projects/*}/executions:execute` | `projects.executions.execute` |
+| `POST /v1/jobs` | `POST /v1/{parent=projects/*}/jobs` → returns `Operation` | `projects.jobs.create` |
+| `GET /v1/jobs/{id}` | `GET /v1/{name=projects/*/jobs/*}` | `projects.jobs.get` |
+| `DELETE /v1/jobs/{id}` | `POST /v1/{name=projects/*/jobs/*}:cancel` | `projects.jobs.cancel` |
+| `GET /v1/capabilities` | `GET /v1/{parent=projects/*}/capabilities` | `projects.capabilities.get` |
+| `GET /v1/integration` | `GET /v1/{parent=projects/*}/integration` | `projects.integration.get` |
+| `GET /v1/browser/profiles` | `GET /v1/{parent=projects/*}/browserProfiles` | `projects.browserProfiles.get` |
+| `POST /v1/browser/admit` | `POST /v1/{parent=projects/*}/browserSessions:admit` | `projects.browserSessions.admit` |
+| browser adapter/* | `POST /v1/{parent=projects/*}/browserAdapters:validate` etc. | `projects.browserAdapters.{validate,register,planLaunch,claimLaunch}` |
+| (job poll) | `GET /v1/{name=projects/*/operations/*}` | `projects.operations.get` |
 
-`executions:run` is a custom verb (AIP) — cradle's hallmark operation. The
+`executions:execute` is a custom verb (AIP) — cradle's hallmark operation. The
 `ExecuteRequest`/`ExecutionResult` wire types stay (they're the domain model); only
 the wrapping (parent path, operationId, envelope, `Operation` option) changes.
 
@@ -98,11 +101,14 @@ the wrapping (parent path, operationId, envelope, `Operation` option) changes.
 
 1. **Parent scoping**: nest under `projects/{project}/...` (default
    `projects/default/` for the single-box daemon).
-2. **operationId** = `<collection>.<verb>` (`executions.run`, `jobs.create`,
-   `capabilities.get`). MCP tool name = operationId, 1:1. Update the fixture
+2. **operationId** = `projects.<collection>[.<subcollection>].<verb>`
+   (`projects.executions.execute`, `projects.jobs.create`,
+   `projects.capabilities.get`). Canonical MCP tool names are derived from
+   operationIds; legacy aliases may stay during migration, but the operationId
+   names must exist. Update the fixture
    `crates/beatbox-server/fixtures/mcp-tools.catalog.json` + the
    `mcp_catalog_drift` test in the same PR.
-3. **Custom verbs**: `executions:run`, `jobs:cancel`, `browserSessions:admit`,
+3. **Custom verbs**: `executions:execute`, `jobs:cancel`, `browserSessions:admit`,
    `browserAdapters:validate` (replace flat `/execute`, `/admit`, adapter sub-paths).
 4. **Shared error envelope** (`API_STYLE.md` §6): promote `ErrorBody` to
    `{ error: { code, status, message, details[], request_id, retryable } }`,
@@ -111,7 +117,7 @@ the wrapping (parent path, operationId, envelope, `Operation` option) changes.
 5. **`Operation` model**: `jobs` already maps cleanly — `JobRecord.status` →
    `Operation.done`, `JobRecord.result/error` → `Operation.response`/`error`. Add
    an `Operation`-shaped poll endpoint `projects/*/operations/*`. Optionally let
-   `executions:run` return an `Operation` for long verifiers.
+   `executions:execute` return an `Operation` for long verifiers.
 6. **`Idempotency-Key`**: move `ExecuteRequest.idempotency_key` to the standard
    `Idempotency-Key` header (keep the field as a fallback/deprecated). Apply to
    `jobs.create` and all mutating browser ops.
@@ -144,8 +150,9 @@ empty `egress[]` exactly as today.
 ## 6. Migration notes
 
 - Pre-1.0; breaking contract changes are allowed now (uniformity over compat
-  shims). Land routes + operationIds + OpenAPI regen + `sdks/*` clients + MCP
-  fixture + drift gate in one slice.
+  shims). The first implementation slice may keep legacy REST paths while moving
+  operationIds, OpenAPI regen, client-surface metadata, and MCP projection to
+  `projects.*`; a later route-breaking slice should add the project-scoped paths.
 - The `idempotency_key` → `Idempotency-Key` header move is the one compat-sensitive
   spot; accept both for one release, then drop the field.
 - Coordinate the `Operation` + error envelope shapes with `tempo` and `palette` so
