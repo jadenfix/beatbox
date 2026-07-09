@@ -194,22 +194,25 @@ impl Client {
     }
 
     pub async fn execute(&self, request: &ExecuteRequest) -> Result<ExecutionResult, ClientError> {
-        let request_builder = self
+        let mut request_builder = self
             .http
             .post(format!("{}/v1/execute", self.base_url))
             .json(request);
+        if let Some(key) = request.idempotency_key.as_deref() {
+            request_builder = request_builder.header("Idempotency-Key", key);
+        }
         let response = self.authorize(request_builder).send().await?;
         decode_response(response).await
     }
 
-    pub async fn create_job(
-        &self,
-        request: &ExecuteRequest,
-    ) -> Result<CreateJobResponse, ClientError> {
-        let request_builder = self
+    pub async fn create_job(&self, request: &ExecuteRequest) -> Result<Operation, ClientError> {
+        let mut request_builder = self
             .http
             .post(format!("{}/v1/jobs", self.base_url))
             .json(request);
+        if let Some(key) = request.idempotency_key.as_deref() {
+            request_builder = request_builder.header("Idempotency-Key", key);
+        }
         let response = self.authorize(request_builder).send().await?;
         decode_response(response).await
     }

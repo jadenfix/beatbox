@@ -35,11 +35,11 @@ use beatbox_core::{
     BrowserSandboxAvailability, BrowserSandboxControl, BrowserSandboxLevel, BrowserSandboxProfile,
     BrowserSensitiveActivityMode, BrowserSensitiveActivityModeContract, BrowserSensitivity,
     BrowserSessionActor, BrowserStorageGuardPlan, BrowserSuppressionGuardPlan,
-    CapabilitiesResponse, CapabilityLane, CapabilityLimits, CreateJobResponse,
-    EcosystemConsumerContract, EcosystemEndpointContract, EcosystemIntegrationContract,
-    EcosystemLaneContract, EcosystemMcpToolContract, ErrorBody, ErrorResponse, ExecuteRequest,
-    ExecutionResult, ExecutionStatus, JobRecord, Lane, Operation, OperationMetadata, Policy,
-    Source, browser_adapter_launch_template_expires_at, browser_adapter_launch_template_issued_at,
+    CapabilitiesResponse, CapabilityLane, CapabilityLimits, EcosystemConsumerContract,
+    EcosystemEndpointContract, EcosystemIntegrationContract, EcosystemLaneContract,
+    EcosystemMcpToolContract, ErrorBody, ErrorResponse, ExecuteRequest, ExecutionResult,
+    ExecutionStatus, JobRecord, Lane, Operation, OperationMetadata, Policy, Source,
+    browser_adapter_launch_template_expires_at, browser_adapter_launch_template_issued_at,
 };
 use beatbox_engine::{BeatboxEngine, CancelFlag, EngineError};
 use bytes::Bytes;
@@ -67,6 +67,7 @@ pub const MAX_BROWSER_ADAPTER_CAPABILITIES: usize = 128;
 pub const MAX_BROWSER_ADAPTER_LAUNCH_REQUESTS: usize = 128;
 pub const AETHER_PAYMENT_HEADER: &str = "x-payment";
 pub const AETHER_PAYMENT_HASH_HEADER: &str = "x-aether-payment-hash";
+pub const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 pub const MAX_AETHER_PAYMENT_HEADER_BYTES: usize = 8192;
 const MCP_ACCESS_CONTROL_ALLOW_METHODS: &str = "POST, GET, OPTIONS";
 const MCP_ACCESS_CONTROL_ALLOW_HEADERS: &str = concat!(
@@ -443,7 +444,8 @@ async fn execute(
     request: Request<Body>,
 ) -> Result<Json<ExecutionResult>, ApiError> {
     state.authorize(&headers)?;
-    let request = parse_json_body(&state, request).await?;
+    let mut request = parse_json_body(&state, request).await?;
+    apply_idempotency_key_header(&headers, &mut request)?;
     execute_sync(&state, request).await.map(Json)
 }
 
@@ -453,7 +455,8 @@ async fn create_job(
     request: Request<Body>,
 ) -> Result<(StatusCode, Json<Operation>), ApiError> {
     state.authorize(&headers)?;
-    let request = parse_json_body(&state, request).await?;
+    let mut request = parse_json_body(&state, request).await?;
+    apply_idempotency_key_header(&headers, &mut request)?;
     admit_execution_request(&state.config, &request, ExecutionMode::Job)?;
     let request = Arc::new(request);
 
@@ -526,6 +529,29 @@ async fn create_job(
     Ok((StatusCode::ACCEPTED, Json(job_operation(job_id))))
 }
 
+fn apply_idempotency_key_header(
+    headers: &HeaderMap,
+    request: &mut ExecuteRequest,
+) -> Result<(), ApiError> {
+    let Some(value) = headers.get(IDEMPOTENCY_KEY_HEADER) else {
+        return Ok(());
+    };
+    let key = value
+        .to_str()
+        .map_err(|_| {
+            ApiError::bad_request("invalid_idempotency_key", "Idempotency-Key must be ASCII")
+        })?
+        .trim();
+    if key.is_empty() {
+        return Err(ApiError::bad_request(
+            "invalid_idempotency_key",
+            "Idempotency-Key must not be empty",
+        ));
+    }
+    request.idempotency_key = Some(key.to_string());
+    Ok(())
+}
+
 fn job_operation(job_id: String) -> Operation {
     Operation {
         name: format!("projects/default/operations/{job_id}"),
@@ -538,7 +564,6 @@ fn job_operation(job_id: String) -> Operation {
         }),
         response: None,
         error: None,
-        job_id,
     }
 }
 
@@ -803,7 +828,12 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, Json(ErrorResponse { error: self.body })).into_response()
+        let status = self.status;
+        let error = self
+            .body
+            .with_http_status(status.as_u16())
+            .with_request_id(format!("req-{}", uuid::Uuid::new_v4()));
+        (status, Json(ErrorResponse { error })).into_response()
     }
 }
 
@@ -4134,7 +4164,6 @@ pub fn openapi_spec_json() -> String {
         ErrorResponse,
         JsonRpcErrorObject,
         JsonRpcErrorResponse,
-        CreateJobResponse,
         Operation,
         OperationMetadata,
         JobRecord,

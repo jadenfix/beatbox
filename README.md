@@ -65,8 +65,7 @@ boundaries, not by linking to internal crates.
 - The OpenAPI contract follows the shared ecosystem API style for contract
   identity: REST operations use `projects.*` operation IDs, mutating operations
   advertise the required `Idempotency-Key` header, and asynchronous job creation
-  returns an Operation-compatible envelope while retaining the existing `job_id`
-  field for current clients.
+  returns the shared `Operation` envelope.
 - MCP keeps the legacy domain tool names and also lists operationId-named aliases
   for the OpenAPI operations. Sensitive browser capability/launch operations and
   async job operations are listed by operationId but fail closed from MCP with a

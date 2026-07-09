@@ -3090,17 +3090,6 @@
         },
         "additionalProperties": false
       },
-      "CreateJobResponse": {
-        "type": "object",
-        "required": [
-          "job_id"
-        ],
-        "properties": {
-          "job_id": {
-            "type": "string"
-          }
-        }
-      },
       "Determinism": {
         "oneOf": [
           {
@@ -3460,14 +3449,52 @@
         "type": "object",
         "required": [
           "code",
-          "message"
+          "message",
+          "status",
+          "request_id",
+          "retryable",
+          "details"
         ],
         "properties": {
           "code": {
             "type": "string"
           },
+          "details": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ErrorDetail"
+            }
+          },
           "message": {
             "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "ErrorDetail": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -3886,8 +3913,7 @@
         "type": "object",
         "required": [
           "name",
-          "done",
-          "job_id"
+          "done"
         ],
         "properties": {
           "done": {
@@ -3902,9 +3928,6 @@
                 "$ref": "#/components/schemas/ErrorBody"
               }
             ]
-          },
-          "job_id": {
-            "type": "string"
           },
           "metadata": {
             "oneOf": [

@@ -1639,7 +1639,6 @@ pub struct Operation {
     pub response: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ErrorBody>,
-    pub job_id: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -1716,10 +1715,22 @@ pub struct Metrics {
     pub peak_memory_bytes: Option<u64>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ErrorDetail {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ErrorBody {
     pub code: String,
     pub message: String,
+    pub status: u16,
+    pub request_id: String,
+    pub retryable: bool,
+    pub details: Vec<ErrorDetail>,
 }
 
 impl ErrorBody {
@@ -1727,7 +1738,22 @@ impl ErrorBody {
         Self {
             code: code.into(),
             message: message.into(),
+            status: 400,
+            request_id: String::new(),
+            retryable: false,
+            details: Vec::new(),
         }
+    }
+
+    pub fn with_http_status(mut self, status: u16) -> Self {
+        self.status = status;
+        self.retryable = matches!(status, 408 | 409 | 412 | 429 | 500 | 503 | 504);
+        self
+    }
+
+    pub fn with_request_id(mut self, request_id: impl Into<String>) -> Self {
+        self.request_id = request_id.into();
+        self
     }
 }
 
