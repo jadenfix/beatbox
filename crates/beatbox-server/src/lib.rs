@@ -46,7 +46,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 pub use jobs::JobStore;
 use jobs::{CancelOutcome, JobStoreError};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -4132,6 +4132,8 @@ pub fn openapi_spec_json() -> String {
         beatbox_core::EgressRecord,
         ErrorBody,
         ErrorResponse,
+        JsonRpcErrorObject,
+        JsonRpcErrorResponse,
         CreateJobResponse,
         Operation,
         OperationMetadata,
@@ -4200,6 +4202,20 @@ pub fn openapi_spec_json() -> String {
 )]
 struct ApiDoc;
 
+#[derive(Serialize, utoipa::ToSchema)]
+struct JsonRpcErrorObject {
+    code: i64,
+    message: String,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct JsonRpcErrorResponse {
+    jsonrpc: String,
+    #[schema(nullable = true)]
+    id: Option<Value>,
+    error: JsonRpcErrorObject,
+}
+
 struct SecurityAddon;
 
 impl utoipa::Modify for SecurityAddon {
@@ -4223,6 +4239,7 @@ impl utoipa::Modify for SecurityAddon {
 
 #[allow(dead_code)]
 mod openapi_paths {
+    use super::JsonRpcErrorResponse;
     use beatbox_core::{
         BrowserAdapterCapabilityIssueRequest, BrowserAdapterCapabilityIssueResponse,
         BrowserAdapterCompletionReport, BrowserAdapterCompletionValidationResponse,
@@ -4470,6 +4487,7 @@ mod openapi_paths {
         responses(
             (status = 200, description = "JSON-RPC response"),
             (status = 202, description = "JSON-RPC notification accepted"),
+            (status = 401, description = "Missing or invalid bearer token", body = JsonRpcErrorResponse),
             (status = 403, description = "Origin not allowed")
         )
     )]
